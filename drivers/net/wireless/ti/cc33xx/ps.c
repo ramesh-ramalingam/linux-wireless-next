@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include "ps.h"
@@ -32,7 +32,7 @@ int cc33xx_ps_set_mode(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 		break;
 
 	default:
-		cc33xx_warning("trying to set ps to unsupported mode %d", mode);
+		dev_warn(cc->dev, "trying to set ps to unsupported mode %d\n", mode);
 		ret = -EINVAL;
 	}
 
@@ -41,38 +41,17 @@ int cc33xx_ps_set_mode(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 
 static void cc33xx_ps_filter_frames(struct cc33xx *cc, u8 hlid)
 {
-	int i;
 	struct sk_buff *skb;
 	struct ieee80211_tx_info *info;
-	unsigned long flags;
-	int filtered[NUM_TX_QUEUES];
 	struct cc33xx_link *lnk = &cc->links[hlid];
 
 	/* filter all frames currently in the low level queues for this hlid */
-	for (i = 0; i < NUM_TX_QUEUES; i++) {
-		filtered[i] = 0;
-		while ((skb = skb_dequeue(&lnk->tx_queue[i]))) {
-			filtered[i]++;
-
-			if (WARN_ON(cc33xx_is_dummy_packet(cc, skb)))
-				continue;
-
-			info = IEEE80211_SKB_CB(skb);
-			info->flags |= IEEE80211_TX_STAT_TX_FILTERED;
-			info->status.rates[0].idx = -1;
-			ieee80211_tx_status_ni(cc->hw, skb);
-		}
+	while ((skb = skb_dequeue(&lnk->tx_pending))) {
+		info = IEEE80211_SKB_CB(skb);
+		info->flags |= IEEE80211_TX_STAT_TX_FILTERED;
+		info->status.rates[0].idx = -1;
+		ieee80211_tx_status_ni(cc->hw, skb);
 	}
-
-	spin_lock_irqsave(&cc->cc_lock, flags);
-	for (i = 0; i < NUM_TX_QUEUES; i++) {
-		cc->tx_queue_count[i] -= filtered[i];
-		if (lnk->wlvif)
-			lnk->wlvif->tx_queue_count[i] -= filtered[i];
-	}
-
-	spin_unlock_irqrestore(&cc->cc_lock, flags);
-	cc33xx_handle_tx_low_watermark(cc);
 }
 
 void cc33xx_ps_link_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
@@ -91,8 +70,8 @@ void cc33xx_ps_link_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	rcu_read_lock();
 	sta = ieee80211_find_sta(vif, cc->links[hlid].addr);
 	if (!sta) {
-		cc33xx_error("could not find sta %pM for starting ps",
-			     cc->links[hlid].addr);
+		dev_err(cc->dev, "could not find sta %pM for starting ps\n",
+			cc->links[hlid].addr);
 		rcu_read_unlock();
 		return;
 	}

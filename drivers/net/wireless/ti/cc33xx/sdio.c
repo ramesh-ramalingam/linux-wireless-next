@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include <linux/mmc/sdio_func.h>
@@ -60,7 +60,7 @@ static int __must_check cc33xx_sdio_raw_read(struct device *child, int addr,
 
 	sdio_claim_host(func);
 
-	if (unlikely(addr == HW_ACCESS_ELP_CTRL_REG)) {
+	if (unlikely(addr == CC33XX_HW_ACCESS_ELP_CTRL_REG)) {
 		((u8 *)buf)[0] = sdio_f0_readb(func, addr, &ret);
 		dev_dbg(child->parent, "sdio read 52 addr 0x%x, byte 0x%02x\n",
 			addr, ((u8 *)buf)[0]);
@@ -76,7 +76,7 @@ static int __must_check cc33xx_sdio_raw_read(struct device *child, int addr,
 
 	sdio_release_host(func);
 
-	if (WARN_ON(ret))
+	if (ret)
 		dev_err(child->parent, "sdio read failed (%d)\n", ret);
 
 	return ret;
@@ -91,7 +91,7 @@ static int __must_check cc33xx_sdio_raw_write(struct device *child, int addr,
 
 	sdio_claim_host(func);
 
-	if (unlikely(addr == HW_ACCESS_ELP_CTRL_REG)) {
+	if (unlikely(addr == CC33XX_HW_ACCESS_ELP_CTRL_REG)) {
 		sdio_f0_writeb(func, ((u8 *)buf)[0], addr, &ret);
 	} else {
 		if (fixed)
@@ -102,7 +102,7 @@ static int __must_check cc33xx_sdio_raw_write(struct device *child, int addr,
 
 	sdio_release_host(func);
 
-	if (WARN_ON(ret))
+	if (ret)
 		dev_err(child->parent, "sdio write failed (%d)\n", ret);
 
 	return ret;
@@ -124,10 +124,10 @@ static int cc33xx_sdio_power_on(struct cc33xx_sdio_glue *glue)
 	}
 
 	sdio_claim_host(func);
-	sdio_enable_func(func);
+	ret = sdio_enable_func(func);
 	sdio_release_host(func);
 
-	return 0;
+	return ret;
 }
 
 static int cc33xx_sdio_power_off(struct cc33xx_sdio_glue *glue)
@@ -256,11 +256,9 @@ static const struct cc33xx_if_operations sdio_ops_inband_irq = {
 	.enable_irq		= cc33xx_sdio_enable_irq,
 };
 
-#ifdef CONFIG_OF
 static const struct cc33xx_family_data cc33xx_data = {
 	.name = "cc33xx",
 	.cfg_name = "ti-connectivity/cc33xx-conf.bin",
-	.nvs_name = "ti-connectivity/cc33xx-nvs.bin",
 };
 
 static const struct of_device_id cc33xx_sdio_of_match_table[] = {
@@ -286,13 +284,6 @@ static int cc33xx_probe_of(struct device *dev, int *irq, int *wakeirq,
 
 	return 0;
 }
-#else
-static int cc33xx_probe_of(struct device *dev, int *irq, int *wakeirq,
-			   struct cc33xx_platdev_data *pdev_data)
-{
-	return -ENODATA;
-}
-#endif /* CONFIG_OF */
 
 static irqreturn_t gpio_irq_hard_handler(int irq, void *cookie)
 {
@@ -328,11 +319,11 @@ static int sdio_cc33xx_probe(struct sdio_func *func,
 	if (func->num != 0x02)
 		return -ENODEV;
 
-	pdev_data = devm_kzalloc(&func->dev, sizeof(*pdev_data), GFP_KERNEL);
+	pdev_data = devm_kzalloc_obj(&func->dev, *pdev_data);
 	if (!pdev_data)
 		return -ENOMEM;
 
-	glue = devm_kzalloc(&func->dev, sizeof(*glue), GFP_KERNEL);
+	glue = devm_kzalloc_obj(&func->dev, *glue);
 	if (!glue)
 		return -ENOMEM;
 
@@ -346,7 +337,7 @@ static int sdio_cc33xx_probe(struct sdio_func *func,
 
 	ret = cc33xx_probe_of(&func->dev, &gpio_irq, &wakeirq, pdev_data);
 	if (ret)
-		goto out;
+		return ret;
 
 	/* if sdio can keep power while host is suspended, enable wow */
 	mmcflags = sdio_get_host_pm_caps(func);
@@ -358,9 +349,8 @@ static int sdio_cc33xx_probe(struct sdio_func *func,
 
 	glue->core = platform_device_alloc("cc33xx", PLATFORM_DEVID_AUTO);
 	if (!glue->core) {
-		dev_err(glue->dev, "can't allocate platform_device");
-		ret = -ENOMEM;
-		goto out;
+		dev_err(glue->dev, "can't allocate platform_device\n");
+		return -ENOMEM;
 	}
 
 	glue->core->dev.parent = &func->dev;
@@ -425,7 +415,6 @@ out_dev_put:
 	if (pdev_data->gpio_irq_num)
 		free_irq(pdev_data->gpio_irq_num, func);
 
-out:
 	return ret;
 }
 
@@ -435,15 +424,19 @@ static void sdio_cc33xx_remove(struct sdio_func *func)
 	struct platform_device *pdev = glue->core;
 	struct cc33xx_platdev_data *pdev_data = dev_get_platdata(&pdev->dev);
 
+	int gpio_irq_num = pdev_data->gpio_irq_num;
+	bool pwr_in_suspend = pdev_data->pwr_in_suspend;
+
 	/* Undo decrement done above in sdio_cc33xx_probe */
 	pm_runtime_get_noresume(&func->dev);
 
+	/* Do not use pdev_data after this point */
 	platform_device_unregister(glue->core);
 
-	if (pdev_data->gpio_irq_num) {
-		free_irq(pdev_data->gpio_irq_num, func);
-		if (pdev_data->pwr_in_suspend)
-			disable_irq_wake(pdev_data->gpio_irq_num);
+	if (gpio_irq_num) {
+		free_irq(gpio_irq_num, func);
+		if (pwr_in_suspend)
+			disable_irq_wake(gpio_irq_num);
 	} else {
 		sdio_claim_host(func);
 		sdio_release_irq(func);
@@ -451,8 +444,7 @@ static void sdio_cc33xx_remove(struct sdio_func *func)
 	}
 }
 
-#ifdef CONFIG_PM
-static int cc33xx_suspend(struct device *dev)
+static int __maybe_unused cc33xx_suspend(struct device *dev)
 {
 	/* Tell MMC/SDIO core it's OK to power down the card
 	 * (if it isn't already), but not to remove it completely
@@ -464,8 +456,8 @@ static int cc33xx_suspend(struct device *dev)
 	int ret = 0;
 
 	if (!cc) {
-		dev_err(dev, "no wilink module was probed\n");
-		goto out;
+		dev_err(dev, "no cc33xx module was probed\n");
+		return -EINVAL;
 	}
 
 	dev_dbg(dev, "cc33xx suspend. keep_device_power: %d\n",
@@ -476,31 +468,26 @@ static int cc33xx_suspend(struct device *dev)
 
 		if (!(sdio_flags & MMC_PM_KEEP_POWER)) {
 			dev_err(dev, "can't keep power while host is suspended\n");
-			ret = -EINVAL;
-			goto out;
+			return -EINVAL;
 		}
 
 		/* keep power while host suspended */
 		ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
 		if (ret) {
 			dev_err(dev, "error while trying to keep power\n");
-			goto out;
+			return ret;
 		}
 	}
-out:
+
 	return ret;
 }
 
-static int cc33xx_resume(struct device *dev)
+static int __maybe_unused cc33xx_resume(struct device *dev)
 {
 	return 0;
 }
 
-static const struct dev_pm_ops cc33xx_sdio_pm_ops = {
-	.suspend	= cc33xx_suspend,
-	.resume		= cc33xx_resume,
-};
-#endif
+static DEFINE_SIMPLE_DEV_PM_OPS(cc33xx_sdio_pm_ops, cc33xx_suspend, cc33xx_resume);
 
 static const struct sdio_device_id cc33xx_devices[] = {
 	{ SDIO_DEVICE(SDIO_VENDOR_ID_TI, SDIO_DEVICE_ID_TI_CC33XX) },
@@ -515,16 +502,14 @@ static struct sdio_driver cc33xx_sdio_driver = {
 	.id_table	= cc33xx_devices,
 	.probe		= sdio_cc33xx_probe,
 	.remove		= sdio_cc33xx_remove,
-#ifdef CONFIG_PM
 	.drv = {
-		.pm = &cc33xx_sdio_pm_ops,
+		.pm = pm_sleep_ptr(&cc33xx_sdio_pm_ops),
 	},
-#endif /* CONFIG_PM */
 };
 
 module_sdio_driver(cc33xx_sdio_driver);
 
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SDIO transport for Texas Instruments CC33xx WLAN driver");
 MODULE_AUTHOR("Michael Nemanov <michael.nemanov@ti.com>");
 MODULE_AUTHOR("Sabeeh Khan <sabeeh-khan@ti.com>");

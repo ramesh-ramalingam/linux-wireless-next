@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
-#include <net/genetlink.h>
+#include <net/netlink.h>
 
 #include "cc33xx.h"
 #include "acx.h"
 #include "io.h"
 #include "testmode.h"
 
-#define CC33XX_TM_MAX_DATA_LENGTH 1024
+#define TM_MAX_DATA_LENGTH 1024
 
 enum cc33xx_tm_commands {
 	CC33XX_TM_CMD_UNSPEC,
@@ -36,13 +36,13 @@ enum cc33xx_tm_attrs {
 	__CC33XX_TM_ATTR_AFTER_LAST
 };
 
-#define CC33XX_TM_ATTR_MAX (__CC33XX_TM_ATTR_AFTER_LAST - 1)
+#define TM_ATTR_MAX (__CC33XX_TM_ATTR_AFTER_LAST - 1)
 
-static struct nla_policy cc33xx_tm_policy[CC33XX_TM_ATTR_MAX + 1] = {
+static struct nla_policy cc33xx_tm_policy[TM_ATTR_MAX + 1] = {
 	[CC33XX_TM_ATTR_CMD_ID] =	{ .type = NLA_U32 },
 	[CC33XX_TM_ATTR_ANSWER] =	{ .type = NLA_U8 },
 	[CC33XX_TM_ATTR_DATA] =		{ .type = NLA_BINARY,
-					  .len = CC33XX_TM_MAX_DATA_LENGTH },
+					  .len = TM_MAX_DATA_LENGTH },
 	[CC33XX_TM_ATTR_IE_ID] =	{ .type = NLA_U32 },
 	[CC33XX_TM_ATTR_PLT_MODE] =	{ .type = NLA_U32 },
 };
@@ -67,50 +67,41 @@ static int cc33xx_tm_cmd_test(struct cc33xx *cc, struct nlattr *tb[])
 	if (buf_len > sizeof(struct cc33xx_command))
 		return -EMSGSIZE;
 
-	mutex_lock(&cc->mutex);
-
-	if (unlikely(cc->state != CC33XX_STATE_ON)) {
-		ret = -EINVAL;
-		goto out;
-	}
+	if (unlikely(cc->state != CC33XX_STATE_ON))
+		return -EINVAL;
 
 	ret = cc33xx_cmd_test(cc, buf, buf_len, answer);
 	if (ret < 0) {
-		cc33xx_warning("testmode cmd test failed: %d", ret);
-		goto out;
+		dev_warn(cc->dev, "testmode cmd test failed: %d\n", ret);
+		return ret;
 	}
 
 	if (answer) {
-		/* If we got bip calibration answer print radio status */
-		struct cc33xx_cmd_cal_p2g *params =
-			(struct cc33xx_cmd_cal_p2g *)buf;
-		s16 radio_status = (s16)le16_to_cpu(params->radio_status);
-
-		if (params->test.id == TEST_CMD_P2G_CAL && radio_status < 0)
-			cc33xx_warning("testmode cmd: radio status=%d",
-				       radio_status);
-		else
-			cc33xx_info("testmode cmd: radio status=%d",
-				    radio_status);
+		if (buf_len >= sizeof(struct cc33xx_cmd_cal_p2g)) {
+			/* If we got bip calibration answer print radio status */
+			struct cc33xx_cmd_cal_p2g *params =
+				(struct cc33xx_cmd_cal_p2g *)buf;
+			s16 radio_status =
+					(s16)le16_to_cpu(params->radio_status);
+			if (params->test.id == TEST_CMD_P2G_CAL &&
+			    radio_status < 0) {
+				dev_warn(cc->dev, "testmode cmd: radio status=%d\n",
+					 radio_status);
+			}
+		}
 
 		len = nla_total_size(buf_len);
 		skb = cfg80211_testmode_alloc_reply_skb(cc->hw->wiphy, len);
-		if (!skb) {
-			ret = -ENOMEM;
-			goto out;
-		}
+		if (!skb)
+			return -ENOMEM;
 
 		if (nla_put(skb, CC33XX_TM_ATTR_DATA, buf_len, buf)) {
 			kfree_skb(skb);
-			ret = -EMSGSIZE;
-			goto out;
+			return -EMSGSIZE;
 		}
 
 		ret = cfg80211_testmode_reply(skb);
 	}
-
-out:
-	mutex_unlock(&cc->mutex);
 
 	return ret;
 }
@@ -118,7 +109,7 @@ out:
 static int cc33xx_tm_cmd_interrogate(struct cc33xx *cc, struct nlattr *tb[])
 {
 	int ret;
-	struct cc33xx_command *cmd;
+	struct cc33xx_command *cmd __free(kfree) = NULL;
 	struct sk_buff *skb;
 	u8 ie_id;
 
@@ -127,47 +118,30 @@ static int cc33xx_tm_cmd_interrogate(struct cc33xx *cc, struct nlattr *tb[])
 
 	ie_id = nla_get_u8(tb[CC33XX_TM_ATTR_IE_ID]);
 
-	mutex_lock(&cc->mutex);
+	if (unlikely(cc->state != CC33XX_STATE_ON))
+		return -EINVAL;
 
-	if (unlikely(cc->state != CC33XX_STATE_ON)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
-	if (!cmd) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	cmd = kzalloc_obj(*cmd);
+	if (!cmd)
+		return -ENOMEM;
 
 	ret = cc33xx_cmd_debug_inter(cc, ie_id, cmd,
 				     sizeof(struct acx_header), sizeof(*cmd));
 	if (ret < 0) {
-		cc33xx_warning("testmode cmd interrogate failed: %d", ret);
-		goto out_free;
+		dev_warn(cc->dev, "testmode cmd interrogate failed: %d\n", ret);
+		return ret;
 	}
 
 	skb = cfg80211_testmode_alloc_reply_skb(cc->hw->wiphy, sizeof(*cmd));
-	if (!skb) {
-		ret = -ENOMEM;
-		goto out_free;
-	}
+	if (!skb)
+		return -ENOMEM;
 
 	if (nla_put(skb, CC33XX_TM_ATTR_DATA, sizeof(*cmd), cmd)) {
 		kfree_skb(skb);
-		ret = -EMSGSIZE;
-		goto out_free;
+		return -EMSGSIZE;
 	}
 
 	ret = cfg80211_testmode_reply(skb);
-	if (ret < 0)
-		goto out_free;
-
-out_free:
-	kfree(cmd);
-
-out:
-	mutex_unlock(&cc->mutex);
 
 	return ret;
 }
@@ -191,19 +165,17 @@ static int cc33xx_tm_cmd_configure(struct cc33xx *cc, struct nlattr *tb[])
 	if (buf_len > sizeof(struct cc33xx_command))
 		return -EMSGSIZE;
 
-	mutex_lock(&cc->mutex);
 	ret = cc33xx_cmd_debug(cc, ie_id, buf, buf_len);
-	mutex_unlock(&cc->mutex);
 
 	if (ret < 0) {
-		cc33xx_warning("testmode cmd configure failed: %d", ret);
+		dev_warn(cc->dev, "testmode cmd configure failed: %d\n", ret);
 		return ret;
 	}
 
 	return 0;
 }
 
-static int cc33xx_tm_detect_fem(struct cc33xx *cc, struct nlattr *tb[])
+static int cc33xx_tm_detect_fem(struct cc33xx *cc)
 {
 	/* return FEM type */
 	int ret, len;
@@ -211,32 +183,27 @@ static int cc33xx_tm_detect_fem(struct cc33xx *cc, struct nlattr *tb[])
 
 	ret = cc33xx_plt_start(cc, PLT_FEM_DETECT);
 	if (ret < 0)
-		goto out;
-
-	mutex_lock(&cc->mutex);
+		return ret;
 
 	len = nla_total_size(sizeof(cc->fem_manuf));
 	skb = cfg80211_testmode_alloc_reply_skb(cc->hw->wiphy, len);
 	if (!skb) {
 		ret = -ENOMEM;
-		goto out_mutex;
+		goto out_stop;
 	}
 
 	if (nla_put(skb, CC33XX_TM_ATTR_DATA, sizeof(cc->fem_manuf),
 		    &cc->fem_manuf)) {
 		kfree_skb(skb);
 		ret = -EMSGSIZE;
-		goto out_mutex;
+		goto out_stop;
 	}
 
 	ret = cfg80211_testmode_reply(skb);
 
-out_mutex:
-	mutex_unlock(&cc->mutex);
-
+out_stop:
 	/* We always stop plt after DETECT mode */
 	cc33xx_plt_stop(cc);
-out:
 	return ret;
 }
 
@@ -259,7 +226,7 @@ static int cc33xx_tm_cmd_set_plt_mode(struct cc33xx *cc, struct nlattr *tb[])
 		ret = cc33xx_plt_start(cc, val);
 		break;
 	case PLT_FEM_DETECT:
-		ret = cc33xx_tm_detect_fem(cc, tb);
+		ret = cc33xx_tm_detect_fem(cc);
 		break;
 	default:
 		ret = -EINVAL;
@@ -269,43 +236,30 @@ static int cc33xx_tm_cmd_set_plt_mode(struct cc33xx *cc, struct nlattr *tb[])
 	return ret;
 }
 
-static int cc33xx_tm_cmd_get_mac(struct cc33xx *cc, struct nlattr *tb[])
+static int cc33xx_tm_cmd_get_mac(struct cc33xx *cc)
 {
 	struct sk_buff *skb;
 	u8 zero_mac[ETH_ALEN] = {0};
 	int ret = 0;
 
-	mutex_lock(&cc->mutex);
+	if (!cc->plt)
+		return -EINVAL;
 
-	if (!cc->plt) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (memcmp(zero_mac, cc->efuse_mac_address, ETH_ALEN) == 0) {
-		ret = -EOPNOTSUPP;
-		goto out;
-	}
+	if (memcmp(zero_mac, cc->efuse_mac_address, ETH_ALEN) == 0)
+		return -EOPNOTSUPP;
 
 	skb = cfg80211_testmode_alloc_reply_skb(cc->hw->wiphy, ETH_ALEN);
-	if (!skb) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (!skb)
+		return -ENOMEM;
 
 	if (nla_put(skb, CC33XX_TM_ATTR_DATA,
 		    ETH_ALEN, cc->efuse_mac_address)) {
 		kfree_skb(skb);
-		ret = -EMSGSIZE;
-		goto out;
+		return -EMSGSIZE;
 	}
 
 	ret = cfg80211_testmode_reply(skb);
-	if (ret < 0)
-		goto out;
 
-out:
-	mutex_unlock(&cc->mutex);
 	return ret;
 }
 
@@ -313,11 +267,11 @@ int cc33xx_tm_cmd(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		  void *data, int len)
 {
 	struct cc33xx *cc = hw->priv;
-	struct nlattr *tb[CC33XX_TM_ATTR_MAX + 1];
+	struct nlattr *tb[TM_ATTR_MAX + 1];
 	u32 nla_cmd;
 	int err;
 
-	err = nla_parse_deprecated(tb, CC33XX_TM_ATTR_MAX, data, len,
+	err = nla_parse_deprecated(tb, TM_ATTR_MAX, data, len,
 				   cc33xx_tm_policy, NULL);
 	if (err)
 		return err;
@@ -342,7 +296,7 @@ int cc33xx_tm_cmd(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	case CC33XX_TM_CMD_SET_PLT_MODE:
 		return cc33xx_tm_cmd_set_plt_mode(cc, tb);
 	case CC33XX_TM_CMD_GET_MAC:
-		return cc33xx_tm_cmd_get_mac(cc, tb);
+		return cc33xx_tm_cmd_get_mac(cc);
 	default:
 		return -EOPNOTSUPP;
 	}

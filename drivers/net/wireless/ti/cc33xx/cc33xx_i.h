@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __CC33XX_I_H__
@@ -13,17 +13,12 @@
 
 struct cc33xx_family_data {
 	const char *name;
-	const char *nvs_name;	/* nvs file */
 	const char *cfg_name;	/* cfg file */
 };
 
 #define CC33XX_TX_SECURITY_LO16(s) ((u16)((s) & 0xffff))
 #define CC33XX_TX_SECURITY_HI32(s) ((u32)(((s) >> 16) & 0xffffffff))
 #define CC33XX_TX_SQN_POST_RECOVERY_PADDING 0xff
-/* Use smaller padding for GEM, as some  APs have issues when it's too big */
-#define CC33XX_TX_SQN_POST_RECOVERY_PADDING_GEM 0x20
-
-#define CC33XX_CIPHER_SUITE_GEM 0x00147201
 
 #define CC33XX_BUSY_WORD_LEN (sizeof(u32))
 
@@ -67,7 +62,6 @@ struct cc33xx;
 #define CC33XX_MAX_CHANNELS 64
 struct cc33xx_scan {
 	struct cfg80211_scan_request *req;
-	unsigned long scanned_ch[BITS_TO_LONGS(CC33XX_MAX_CHANNELS)];
 	bool failed;
 	u8 state;
 	u8 ssid[IEEE80211_MAX_SSID_LEN + 1];
@@ -117,9 +111,9 @@ struct cc33xx_ap_key {
 enum cc33xx_flags {
 	CC33XX_FLAG_GPIO_POWER,
 	CC33XX_FLAG_TX_PENDING,
+	CC33XX_FLAG_TX_STOPPED,
 	CC33XX_FLAG_IN_ELP,
 	CC33XX_FLAG_FW_TX_BUSY,
-	CC33XX_FLAG_DUMMY_PACKET_PENDING,
 	CC33XX_FLAG_SUSPENDED,
 	CC33XX_FLAG_PENDING_WORK,
 	CC33XX_FLAG_SOFT_GEMINI,
@@ -134,7 +128,6 @@ enum cc33xx_vif_flags {
 	WLVIF_FLAG_INITIALIZED,
 	WLVIF_FLAG_STA_ASSOCIATED,
 	WLVIF_FLAG_STA_AUTHORIZED,
-	WLVIF_FLAG_IBSS_JOINED,
 	WLVIF_FLAG_AP_STARTED,
 	WLVIF_FLAG_IN_PS,
 	WLVIF_FLAG_STA_STATE_SENT,
@@ -149,8 +142,8 @@ enum cc33xx_vif_flags {
 struct cc33xx_vif;
 
 struct cc33xx_link {
-	/* AP-mode - TX queue per AC in link */
-	struct sk_buff_head tx_queue[NUM_TX_QUEUES];
+	/* TX pending packets */
+	struct sk_buff_head tx_pending;
 
 	/* accounting for allocated / freed packets in FW */
 	u8 allocated_pkts;
@@ -179,16 +172,14 @@ struct cc33xx_link {
 
 #define CC33XX_MAX_RX_FILTERS 5
 #define CC33XX_RX_FILTER_MAX_FIELDS 8
-
-#define CC33XX_RX_FILTER_ETH_HEADER_SIZE 14
-#define CC33XX_RX_FILTER_MAX_FIELDS_SIZE 95
-#define RX_FILTER_FIELD_OVERHEAD				\
-	(sizeof(struct cc33xx_rx_filter_field) - sizeof(u8 *))
-#define CC33XX_RX_FILTER_MAX_PATTERN_SIZE			\
-	(CC33XX_RX_FILTER_MAX_FIELDS_SIZE - RX_FILTER_FIELD_OVERHEAD)
-
 #define CC33XX_RX_FILTER_FLAG_IP_HEADER           0
 #define CC33XX_RX_FILTER_FLAG_ETHERNET_HEADER     BIT(1)
+
+#define RX_FILTER_MAX_FIELDS_SIZE 95
+#define RX_FILTER_FIELD_OVERHEAD				\
+	(sizeof(struct cc33xx_rx_filter_field) - sizeof(u8 *))
+#define RX_FILTER_MAX_PATTERN_SIZE			\
+	(RX_FILTER_MAX_FIELDS_SIZE - RX_FILTER_FIELD_OVERHEAD)
 
 struct ieee80211_header {
 	__le16 frame_ctl;
@@ -246,7 +237,7 @@ struct cc33xx_vif {
 	u8 p2p; /* we are using p2p role */
 	u8 role_id;
 
-	/* sta/ibss specific */
+	/* sta specific */
 	u8 dev_role_id;
 	u8 dev_hlid;
 
@@ -277,12 +268,6 @@ struct cc33xx_vif {
 			u8 ucast_rate_idx[CONF_TX_MAX_AC_COUNT];
 		} ap;
 	};
-
-	/* the hlid of the last transmitted skb */
-	int last_tx_hlid;
-
-	/* counters of packets per AC, across all links in the vif */
-	int tx_queue_count[NUM_TX_QUEUES];
 
 	unsigned long links_map[BITS_TO_LONGS(CC33XX_MAX_LINKS)];
 
@@ -328,7 +313,6 @@ struct cc33xx_vif {
 
 	/* save the current encryption type for auto-arp config */
 	u8 encryption_type;
-	__be32 ip_addr;
 
 	/* RX BA constraint value */
 	bool ba_support;
@@ -336,10 +320,8 @@ struct cc33xx_vif {
 
 	bool wmm_enabled;
 
-	bool radar_enabled;
-
-	struct delayed_work channel_switch_work;
-	struct delayed_work connection_loss_work;
+	struct wiphy_delayed_work channel_switch_work;
+	struct wiphy_delayed_work connection_loss_work;
 
 	/* number of in connection stations */
 	int inconn_count;
@@ -352,21 +334,7 @@ struct cc33xx_vif {
 	 */
 	int hw_queue_base;
 
-	/* do we have a pending auth reply? (and ROC) */
-	bool ap_pending_auth_reply;
-
-	/* time when we sent the pending auth reply */
-	unsigned long pending_auth_reply_time;
-
-	/* work for canceling ROC after pending auth reply */
-	struct delayed_work pending_auth_complete_work;
-
-	struct delayed_work roc_timeout_work;
-
-	/* update rate control */
-	enum ieee80211_sta_rx_bandwidth rc_update_bw;
-	struct ieee80211_sta_ht_cap rc_ht_cap;
-	struct work_struct rc_update_work;
+	struct wiphy_delayed_work roc_timeout_work;
 
 	/* total freed FW packets on the link.
 	 * For STA this holds the PN of the link to the AP.
@@ -400,7 +368,6 @@ struct cc33xx_vif {
 
 static inline struct cc33xx_vif *cc33xx_vif_to_data(struct ieee80211_vif *vif)
 {
-	WARN_ON(!vif);
 	return (struct cc33xx_vif *)vif->drv_priv;
 }
 
@@ -435,8 +402,6 @@ int cc33xx_plt_start(struct cc33xx *cc, const enum plt_mode plt_mode);
 int cc33xx_plt_stop(struct cc33xx *cc);
 void cc33xx_queue_recovery_work(struct cc33xx *cc);
 void cc33xx_flush_deferred_work(struct cc33xx *cc);
-
-#define SESSION_COUNTER_INVALID 7 /* used with dummy_packet */
 
 #define CC33XX_MAX_TXPWR 21 /* maximum power limit is 21dBm */
 #define CC33XX_MIN_TXPWR -10 /* minimum power limit is -10dBm */

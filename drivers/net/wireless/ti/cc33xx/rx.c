@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include "acx.h"
@@ -18,27 +18,31 @@ static void cc33xx_rx_status(struct cc33xx *cc,
 			     struct ieee80211_rx_status *status,
 			     u8 beacon, u8 probe_rsp)
 {
+	u8 rate_idx;
+
 	memset(status, 0, sizeof(struct ieee80211_rx_status));
 
 	if ((desc->flags & CC33XX_RX_DESC_BAND_MASK) == CC33XX_RX_DESC_BAND_BG)
 		status->band = NL80211_BAND_2GHZ;
 	else if ((desc->flags & CC33XX_RX_DESC_BAND_MASK) == CC33XX_RX_DESC_BAND_J)
 		status->band = NL80211_BAND_2GHZ;
-	else if ((desc->flags & CC33XX_RX_DESC_BAND_MASK) == CC33XX_RX_DESC_BAND_A)
-		status->band = NL80211_BAND_5GHZ;
 	else
-		status->band = NL80211_BAND_5GHZ; /* todo -Should be 6GHZ when added */
+		status->band = NL80211_BAND_5GHZ;
 
-	status->rate_idx = cc33xx_rate_to_idx(cc, desc->rate, status->band);
+	rate_idx = cc33xx_rate_to_idx(desc->rate, status->band);
+	if (rate_idx == CONF_HW_RXTX_RATE_UNSUPPORTED)
+		dev_err(cc->dev,  "Invalid RX rate from HW: %d\n", desc->rate);
 
-	if (desc->frame_format == CC33xx_VHT)
+	status->rate_idx =  rate_idx;
+
+	if (desc->frame_format == CC33XX_VHT)
 		status->encoding = RX_ENC_VHT;
-	else if ((desc->frame_format == CC33xx_HT_MF) ||
-		 (desc->frame_format == CC33xx_HT_GF))
+	else if ((desc->frame_format == CC33XX_HT_MF) ||
+		 (desc->frame_format == CC33XX_HT_GF))
 		status->encoding = RX_ENC_HT;
-	else if ((desc->frame_format == CC33xx_B_SHORT) ||
-		 (desc->frame_format == CC33xx_B_LONG) ||
-		(desc->frame_format == CC33xx_LEGACY_OFDM))
+	else if ((desc->frame_format == CC33XX_B_SHORT) ||
+		 (desc->frame_format == CC33XX_B_LONG) ||
+		(desc->frame_format == CC33XX_LEGACY_OFDM))
 		status->encoding = RX_ENC_LEGACY;
 	else
 		status->encoding = RX_ENC_HE;
@@ -64,17 +68,14 @@ static void cc33xx_rx_status(struct cc33xx *cc,
 
 		if (unlikely(desc_err_code & CC33XX_RX_DESC_MIC_FAIL)) {
 			status->flag |= RX_FLAG_MMIC_ERROR;
-			cc33xx_warning("Michael MIC error. Desc: 0x%x",
-				       desc_err_code);
+			dev_warn(cc->dev, "Michael MIC error. Desc: 0x%x\n",
+				 desc_err_code);
 		}
 	}
 
 	if (beacon || probe_rsp)
 		status->boottime_ns = ktime_get_boottime_ns();
 
-	if (beacon)
-		cc33xx_set_pending_regdomain_ch(cc, (u16)desc->channel,
-						status->band);
 	status->nss = 1;
 }
 
@@ -111,8 +112,8 @@ static int cc33xx_rx_get_packet_descriptor(struct cc33xx *cc, u8 *raw_buffer_ptr
 	pkt_data_len -=	sizeof(struct cc33xx_rx_descriptor);
 
 	if (unlikely(cc->partial_rx.desc.status & CC33XX_RX_DESC_DECRYPT_FAIL)) {
-		cc33xx_warning("corrupted packet in RX: status: 0x%x len: %d",
-			       cc->partial_rx.desc.status & CC33XX_RX_DESC_STATUS_MASK,
+		dev_warn(cc->dev, "corrupted packet in RX: status: 0x%x len: %d\n",
+			 cc->partial_rx.desc.status & CC33XX_RX_DESC_STATUS_MASK,
 			pkt_data_len);
 
 		/* If frame can be fully dropped */
@@ -129,7 +130,6 @@ static int cc33xx_rx_get_packet_descriptor(struct cc33xx *cc, u8 *raw_buffer_ptr
 
 	skb = __dev_alloc_skb(pkt_data_len, GFP_KERNEL);
 	if (!skb) {
-		cc33xx_error("Couldn't allocate RX frame");
 		/* If frame can be fully dropped */
 		if (pkt_data_len <= *raw_buffer_len) {
 			*raw_buffer_len -=  pkt_data_len;
@@ -206,15 +206,15 @@ static int cc33xx_rx_get_packet_data(struct cc33xx *cc, u8 *raw_buffer_ptr,
 			 IEEE80211_SKB_RXCB(cc->partial_rx.skb),
 			 beacon, is_probe_resp);
 
-	seq_num = (le16_to_cpu(hdr->seq_ctrl) & IEEE80211_SCTL_SEQ) >> 4;
-	cc33xx_debug(DEBUG_RX, "rx skb 0x%p: %d B %s seq %d link id %d",
+	seq_num = le16_get_bits(hdr->seq_ctrl, IEEE80211_SCTL_SEQ);
+	cc33xx_debug(cc->dev, DEBUG_RX, "rx skb 0x%p: %d B %s seq %d link id %d\n",
 		     cc->partial_rx.skb,
 		     cc->partial_rx.skb->len - cc->partial_rx.desc.pad_len,
 		     beacon ? "beacon" : "", seq_num, cc->partial_rx.desc.hlid);
 
-	cc33xx_debug(DEBUG_RX, "rx frame. frame type 0x%x, frame length 0x%x, frame address 0x%lx",
+	cc33xx_debug(cc->dev, DEBUG_RX, "rx frame. frame type 0x%x, frame length 0x%x, frame address %p\n",
 		     hdr->frame_control, cc->partial_rx.skb->len,
-		     (unsigned long)cc->partial_rx.skb->data);
+		     cc->partial_rx.skb->data);
 
 	/* Adding frame to queue */
 	skb_queue_tail(&cc->deferred_rx_queue, cc->partial_rx.skb);
@@ -233,8 +233,7 @@ out:
 	return (prev_buffer_len - *raw_buffer_len);
 }
 
-static int cc33xx_rx_drop_packet_data(struct cc33xx *cc, u8 *raw_buffer_ptr,
-				      u16 *raw_buffer_len)
+static int cc33xx_rx_drop_packet_data(struct cc33xx *cc, u16 *raw_buffer_len)
 {
 	u16 prev_buffer_len = *raw_buffer_len;
 
@@ -269,7 +268,7 @@ static void cc33xx_rx_handle_packet(struct cc33xx *cc, u8 *raw_buffer_ptr,
 		cc->partial_rx.handled_bytes = 0;
 		cc->partial_rx.status = CURR_RX_DESC;
 
-		cc33xx_debug(DEBUG_RX, "rx frame. desc length 0x%x, alignment 0x%x, padding 0x%x",
+		cc33xx_debug(cc->dev, DEBUG_RX, "rx frame. desc length 0x%x, alignment 0x%x, padding 0x%x\n",
 			     desc->length, desc->header_alignment, desc->pad_len);
 	}
 
@@ -283,8 +282,7 @@ static void cc33xx_rx_handle_packet(struct cc33xx *cc, u8 *raw_buffer_ptr,
 
 	/* Check if we are in the middle of dropped packet */
 	if (unlikely(cc->partial_rx.status == CURR_RX_DROP)) {
-		consumed_bytes = cc33xx_rx_drop_packet_data(cc, raw_buffer_ptr,
-							    raw_buffer_len);
+		consumed_bytes = cc33xx_rx_drop_packet_data(cc, raw_buffer_len);
 		raw_buffer_ptr += consumed_bytes;
 	}
 
@@ -312,7 +310,7 @@ int cc33xx_rx(struct cc33xx *cc, u8 *rx_buf_ptr, u16 rx_buf_len)
 
 	/* Split data into separate packets */
 	while (local_rx_buffer_len > 0) {
-		cc33xx_debug(DEBUG_RX, "start loop. buffer length %d",
+		cc33xx_debug(cc->dev, DEBUG_RX, "start loop. buffer length %d\n",
 			     local_rx_buffer_len);
 
 		/* the handle data call can only fail in memory-outage
@@ -326,7 +324,7 @@ int cc33xx_rx(struct cc33xx *cc, u8 *rx_buf_ptr, u16 rx_buf_len)
 
 		pkt_offset +=  consumed_bytes;
 
-		cc33xx_debug(DEBUG_RX, "end rx loop. buffer length %d, packet counter %d, current packet status %d",
+		cc33xx_debug(cc->dev, DEBUG_RX, "end rx loop. buffer length %d, packet counter %d, current packet status %d\n",
 			     local_rx_buffer_len, cc->rx_counter,
 			     cc->partial_rx.status);
 	}
@@ -341,16 +339,16 @@ int cc33xx_rx_filter_enable(struct cc33xx *cc, int index, bool enable,
 	int ret;
 
 	if (!!test_bit(index, cc->rx_filter_enabled) == enable) {
-		cc33xx_warning("Request to enable an already enabled rx filter %d",
-			       index);
+		dev_warn(cc->dev, "Request to enable an already enabled rx filter %d\n",
+			 index);
 		return 0;
 	}
 
 	ret = cc33xx_acx_set_rx_filter(cc, index, enable, filter);
 
 	if (ret) {
-		cc33xx_error("Failed to %s rx data filter %d (err=%d)",
-			     enable ? "enable" : "disable", index, ret);
+		dev_err(cc->dev, "Failed to %s rx data filter %d (err=%d)\n",
+			str_enable_disable(enable), index, ret);
 		return ret;
 	}
 
@@ -371,10 +369,9 @@ int cc33xx_rx_filter_clear_all(struct cc33xx *cc)
 			continue;
 		ret = cc33xx_rx_filter_enable(cc, i, 0, NULL);
 		if (ret)
-			goto out;
+			return ret;
 	}
 
-out:
 	return ret;
 }
 #else

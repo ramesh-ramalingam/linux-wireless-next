@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include <linux/firmware.h>
@@ -60,24 +60,22 @@ static u8 *fetch_container(struct cc33xx *cc, const char *container_name,
 	ret = request_firmware(&container, container_name, cc->dev);
 
 	if (ret < 0) {
-		cc33xx_error("could not get container %s: (%d)",
-			     container_name, ret);
+		dev_err(cc->dev, "could not get container %s: (%d)\n",
+			container_name, ret);
 		return NULL;
 	}
 
 	if (container->size % 4) {
-		cc33xx_error("container size is not word-aligned: %zu",
-			     container->size);
+		dev_err(cc->dev, "container size is not word-aligned: %zu\n",
+			container->size);
 		goto out;
 	}
 
 	*container_len = container->size;
 	container_data = vmalloc(container->size);
 
-	if (!container_data) {
-		cc33xx_error("could not allocate memory for the container");
+	if (!container_data)
 		goto out;
-	}
 
 	memcpy(container_data, container->data, container->size);
 
@@ -93,28 +91,27 @@ static int cc33xx_set_power_on(struct cc33xx *cc)
 	msleep(CC33XX_PRE_POWER_ON_SLEEP);
 	ret = cc33xx_power_on(cc);
 	if (ret < 0)
-		goto out;
+		return ret;
+
 	msleep(CC33XX_POWER_ON_SLEEP);
 	cc33xx_io_reset(cc);
 	cc33xx_io_init(cc);
 
-out:
-	return ret;
+	return 0;
 }
 
 static int cc33xx_chip_wakeup(struct cc33xx *cc)
 {
-	int ret = 0;
+	int ret;
 
 	ret = cc33xx_set_power_on(cc);
 	if (ret < 0)
-		goto out;
+		return ret;
 
 	if (!cc33xx_set_block_size(cc))
 		cc->quirks &= ~CC33XX_QUIRK_TX_BLOCKSIZE_ALIGN;
 
-out:
-	return ret;
+	return 0;
 }
 
 static int wait_for_boot_irq(struct cc33xx *cc, u32 boot_irq_mask,
@@ -136,16 +133,16 @@ static int wait_for_boot_irq(struct cc33xx *cc, u32 boot_irq_mask,
 	reinit_completion(&fw_download->wait_on_irq);
 
 	if (ret == 0) {
-		cc33xx_error("boot IRQ timeout");
+		dev_err(cc->dev, "boot IRQ timeout\n");
 		return -1;
 	} else if (ret < 0) {
-		cc33xx_error("boot IRQ completion error %d", ret);
+		dev_err(cc->dev, "boot IRQ completion error %d\n", ret);
 		return -2;
 	}
 
 	if (boot_irq_mask != pending_irqs) {
-		cc33xx_error("Unexpected IRQ received @ boot: 0x%x",
-			     pending_irqs);
+		dev_err(cc->dev, "Unexpected IRQ received @ boot: 0x%x\n",
+			pending_irqs);
 		return -3;
 	}
 
@@ -170,20 +167,19 @@ static int download_container(struct cc33xx *cc, u8 *container, size_t len)
 
 		is_last_transfer = (current_transfer + current_transfer_size >= container_end);
 
-		ret = cmd_download_container_chunk(cc,
-						   current_transfer,
-						   current_transfer_size,
-						   is_last_transfer);
+		ret = cc33xx_cmd_download_container_chunk(cc,
+							  current_transfer,
+							  current_transfer_size,
+							  is_last_transfer);
 
 		current_transfer += current_transfer_size;
 
 		if (ret < 0) {
-			cc33xx_error("Chunk transfer failed");
-			goto out;
+			dev_err(cc->dev, "Chunk transfer failed\n");
+			break;
 		}
 	}
 
-out:
 	return ret;
 }
 
@@ -201,15 +197,15 @@ static int container_download_and_wait(struct cc33xx *cc,
 
 	ret = download_container(cc, container_data, container_len);
 	if (ret < 0) {
-		cc33xx_error("Transfer error while downloading %s",
-			     container_name);
+		dev_err(cc->dev, "Transfer error while downloading %s\n",
+			container_name);
 		goto out;
 	}
 
 	ret = wait_for_boot_irq(cc, irq_wait_mask, CC33XX_BOOT_TIMEOUT);
 
 	if (ret < 0) {
-		cc33xx_error("%s boot signal timeout", container_name);
+		dev_err(cc->dev, "%s boot signal timeout\n", container_name);
 		goto out;
 	}
 
@@ -225,7 +221,7 @@ static int fw_download_alloc(struct cc33xx *cc)
 	if (WARN_ON(cc->fw_download))
 		return -EFAULT;
 
-	cc->fw_download = kzalloc(sizeof(*cc->fw_download), GFP_KERNEL);
+	cc->fw_download = kzalloc_obj(*cc->fw_download);
 	if (!cc->fw_download)
 		return -ENOMEM;
 
@@ -249,7 +245,7 @@ static int get_device_info(struct cc33xx *cc)
 	union hw_info hw_info;
 	u64 mac_address;
 
-	ret = cmd_get_device_info(cc, hw_info.bytes, sizeof(hw_info.bytes));
+	ret = cc33xx_cmd_get_device_info(cc, hw_info.bytes, sizeof(hw_info.bytes));
 	if (ret < 0)
 		return ret;
 

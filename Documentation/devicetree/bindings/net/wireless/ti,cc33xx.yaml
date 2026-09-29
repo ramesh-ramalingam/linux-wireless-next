@@ -7,16 +7,13 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Texas Instruments CC33xx Wireless LAN Controller
 
 maintainers:
-  - Michael Nemanov <michael.nemanov@ti.com>
+  - Ramesh Ramalingam <r-ramalingam@ti.com>
 
 description:
   The CC33xx is a family of IEEE 802.11ax chips from Texas Instruments.
   These chips must be connected via SDIO and support in-band / out-of-band IRQ.
 
 properties:
-  $nodename:
-    pattern: "^wifi@2"
-
   compatible:
     oneOf:
       - const: ti,cc3300

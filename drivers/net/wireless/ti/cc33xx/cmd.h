@@ -1,14 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __CMD_H__
 #define __CMD_H__
 
 #include "cc33xx.h"
-
-struct acx_header;
 
 enum buffer_size {
 	INI_MAX_BUFFER_SIZE,
@@ -18,14 +16,13 @@ enum buffer_size {
 int cc33xx_set_max_buffer_size(struct cc33xx *cc, enum buffer_size max_buffer_size);
 int cc33xx_cmd_send(struct cc33xx *cc, u16 id, void *buf,
 		    size_t len, size_t res_len);
-int cc33xx_cmd_role_enable(struct cc33xx *cc, u8 *addr,
+int cc33xx_cmd_role_enable(struct cc33xx *cc, const u8 *addr,
 			   u8 role_type, u8 *role_id);
 int cc33xx_cmd_role_disable(struct cc33xx *cc, u8 *role_id);
 int cc33xx_cmd_role_start_sta(struct cc33xx *cc, struct cc33xx_vif *wlvif);
 int cc33xx_cmd_role_stop_sta(struct cc33xx *cc, struct cc33xx_vif *wlvif);
 int cc33xx_cmd_role_start_ap(struct cc33xx *cc, struct cc33xx_vif *wlvif);
 int cc33xx_cmd_role_stop_ap(struct cc33xx *cc, struct cc33xx_vif *wlvif);
-int cc33xx_cmd_role_start_ibss(struct cc33xx *cc, struct cc33xx_vif *wlvif);
 int cc33xx_start_dev(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 		     enum nl80211_band band, int channel);
 int cc33xx_stop_dev(struct cc33xx *cc, struct cc33xx_vif *wlvif);
@@ -48,8 +45,7 @@ int cc33xx_cmd_set_sta_key(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 int cc33xx_cmd_set_ap_key(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			  u16 action, u8 id, u8 key_type, u8 key_size,
 			  const u8 *key, u8 hlid, u32 tx_seq_32, u16 tx_seq_16);
-int cc33xx_cmd_set_peer_state(struct cc33xx *cc,
-			      struct cc33xx_vif *wlvif, u8 hlid);
+int cc33xx_cmd_set_peer_state(struct cc33xx *cc, u8 hlid);
 int cc33xx_roc(struct cc33xx *cc, struct cc33xx_vif *wlvif, u8 role_id,
 	       enum nl80211_band band, u8 channel);
 int cc33xx_croc(struct cc33xx *cc, u8 role_id);
@@ -57,27 +53,19 @@ int cc33xx_cmd_add_peer(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			struct ieee80211_sta *sta, u8 *hlid, u8 is_connected);
 int cc33xx_cmd_remove_peer(struct cc33xx *cc,
 			   struct cc33xx_vif *wlvif, u8 hlid);
-void cc33xx_set_pending_regdomain_ch(struct cc33xx *cc, u16 channel,
-				     enum nl80211_band band);
-int cc33xx_cmd_regdomain_config_locked(struct cc33xx *cc);
-int cc33xx_cmd_generic_cfg(struct cc33xx *cc, struct cc33xx_vif *wlvif,
-			   u8 feature, u8 enable, u8 value);
-int cc33xx_cmd_config_fwlog(struct cc33xx *cc);
 int cc33xx_cmd_stop_channel_switch(struct cc33xx *cc, struct cc33xx_vif *wlvif);
 int cc33xx_set_link(struct cc33xx *cc, struct cc33xx_vif *wlvif, u8 link);
 void cc33xx_clear_link(struct cc33xx *cc, struct cc33xx_vif *wlvif, u8 *hlid);
 int cc33xx_cmd_role_start_transceiver(struct cc33xx *cc, u8 role_id);
 int cc33xx_cmd_role_stop_transceiver(struct cc33xx *cc);
-int cc33xx_cmd_plt_enable(struct cc33xx *cc, u8 role_id);
+int cc33xx_cmd_plt_enable(struct cc33xx *cc);
 int cc33xx_cmd_plt_disable(struct cc33xx *cc);
-int cmd_channel_switch(struct cc33xx *cc, struct cc33xx_vif *wlvif,
-		       struct ieee80211_channel_switch *ch_switch);
-int cmd_dfs_master_restart(struct cc33xx *cc, struct cc33xx_vif *wlvif);
-int cmd_set_cac(struct cc33xx *cc, struct cc33xx_vif *wlvif, bool start);
-int cmd_set_bd_addr(struct cc33xx *cc, u8 *bd_addr);
-int cmd_get_device_info(struct cc33xx *cc, u8 *info_buffer, size_t buffer_len);
-int cmd_download_container_chunk(struct cc33xx *cc, u8 *chunk,
-				 size_t chunk_len, bool is_last_chunk);
+int cc33xx_cmd_channel_switch(struct cc33xx *cc, struct cc33xx_vif *wlvif,
+			      struct ieee80211_channel_switch *ch_switch);
+int cc33xx_cmd_set_bd_addr(struct cc33xx *cc, u8 *bd_addr);
+int cc33xx_cmd_get_device_info(struct cc33xx *cc, u8 *info_buffer, size_t buffer_len);
+int cc33xx_cmd_download_container_chunk(struct cc33xx *cc, u8 *chunk,
+					size_t chunk_len, bool is_last_chunk);
 
 enum cc33xx_cmd {
 	CMD_EMPTY,
@@ -143,17 +131,8 @@ enum cc33xx_cmd {
 	/* The following commands are legacy and are not yet supported */
 
 	CMD_SET_PS_MODE,
-	CMD_DFS_CHANNEL_CONFIG,
-	CMD_CONFIG_FWLOGGER,
-	CMD_START_FWLOGGER,
-	CMD_STOP_FWLOGGER,
-	CMD_GENERIC_CFG,
-	CMD_DFS_MASTER_RESTART,
-	CMD_CAC_START,
-	CMD_CAC_STOP,
-	CMD_DFS_RADAR_DETECTION_DEBUG,
 
-	MAX_COMMAND_ID_CC33xx = 0x7FFF,
+	MAX_COMMAND_ID_CC33XX = 0x7FFF,
 };
 
 #define MAX_CMD_PARAMS 572
@@ -164,7 +143,7 @@ enum cc33xx_cmd {
 #define CC33XX_EVENT_TIMEOUT       5000
 
 struct cc33xx_cmd_header {
-	struct NAB_header NAB_header;
+	struct nab_header nab_header;
 	__le16 id;
 	__le16 status;
 
@@ -227,6 +206,11 @@ struct cc33xx_cmd_complete_role_enable {
 	struct command_complete_header header;
 	u8 role_id;
 	u8 padding[3];
+} __packed;
+
+union cc33xx_cmd_role_enable_command {
+	struct cc33xx_cmd_role_enable cmd;
+	struct cc33xx_cmd_complete_role_enable resp;
 } __packed;
 
 struct cc33xx_cmd_role_disable {
@@ -338,6 +322,11 @@ struct cc33xx_cmd_complete_role_start {
 	};
 } __packed;
 
+union cc33xx_cmd_role_start_command {
+	struct cc33xx_cmd_role_start cmd;
+	struct cc33xx_cmd_complete_role_start resp;
+} __packed;
+
 struct cc33xx_cmd_role_stop {
 	struct cc33xx_cmd_header header;
 
@@ -367,8 +356,6 @@ struct cc33xx_cmd_ps_params {
 } __packed;
 
 /* HW encryption keys */
-#define NUM_ACCESS_CATEGORIES_COPY 4
-
 enum cc33xx_cmd_key_action {
 	KEY_ADD_OR_REPLACE = 1,
 	KEY_REMOVE         = 2,
@@ -387,7 +374,7 @@ enum cc33xx_cmd_key_type {
 	KEY_WEP  = 1,
 	KEY_TKIP = 2,
 	KEY_AES  = 3, /* aes_ccmp_128 */
-	KEY_GEM  = 4,
+	KEY_GEM  = 4, /* Not supported */
 	KEY_IGTK = 5, /* bip_cmac_128 */
 	KEY_CMAC_256 = 6,
 	KEY_GMAC_128 = 7,
@@ -435,8 +422,8 @@ struct cc33xx_cmd_set_keys {
 
 	/* This field holds the security key data to add to the STA table */
 	u8 key[MAX_KEY_SIZE];
-	__le16 ac_seq_num16[NUM_ACCESS_CATEGORIES_COPY];
-	__le32 ac_seq_num32[NUM_ACCESS_CATEGORIES_COPY];
+	__le16 ac_seq_num16[IEEE80211_NUM_ACS];
+	__le32 ac_seq_num32[IEEE80211_NUM_ACS];
 } __packed;
 
 struct cc33xx_cmd_test_header {
@@ -444,7 +431,7 @@ struct cc33xx_cmd_test_header {
 	u8 padding[3];
 } __packed;
 
-#define CC33XX_CMD_STA_STATE_CONNECTED  1
+#define CMD_STA_STATE_CONNECTED  1
 
 struct cc33xx_cmd_set_peer_state {
 	struct cc33xx_cmd_header header;
@@ -502,7 +489,7 @@ struct cc33xx_cmd_add_peer {
 	u8 link_type;
 	u8 addr[ETH_ALEN];
 	__le16 aid;
-	u8 psd_type[NUM_ACCESS_CATEGORIES_COPY];
+	u8 psd_type[IEEE80211_NUM_ACS];
 	__le32 supported_rates;
 	u8 bss_index;
 	u8 sp_len;
@@ -520,6 +507,11 @@ struct cc33xx_cmd_complete_add_peer {
 	struct command_complete_header header;
 	u8 hlid;
 	u8 session_id;
+} __packed;
+
+union cc33xx_cmd_add_peer_command {
+	struct cc33xx_cmd_add_peer cmd;
+	struct cc33xx_cmd_complete_add_peer resp;
 } __packed;
 
 struct cc33xx_cmd_remove_peer {
@@ -553,49 +545,6 @@ enum cc33xx_fwlogger_output {
 	CC33XX_FWLOG_OUTPUT_HOST,
 };
 
-struct cc33xx_cmd_regdomain_dfs_config {
-	struct cc33xx_cmd_header header;
-
-	__le32 ch_bit_map1;
-	__le32 ch_bit_map2;
-	u8 dfs_region;
-	u8 padding[3];
-} __packed;
-
-enum cc33xx_generic_cfg_feature {
-	CC33XX_CFG_FEATURE_RADAR_DEBUG = 2,
-};
-
-struct cc33xx_cmd_generic_cfg {
-	struct cc33xx_cmd_header header;
-
-	u8 role_id;
-	u8 feature;
-	u8 enable;
-	u8 value;
-} __packed;
-
-struct cc33xx_cmd_config_fwlog {
-	struct cc33xx_cmd_header header;
-
-	/* See enum cc33xx_fwlogger_log_mode */
-	u8 logger_mode;
-
-	/* Minimum log level threshold */
-	u8 log_severity;
-
-	/* Include/exclude timestamps from the log messages */
-	u8 timestamp;
-
-	/* See enum cc33xx_fwlogger_output */
-	u8 output;
-
-	/* Regulates the frequency of log messages */
-	u8 threshold;
-
-	u8 padding[3];
-} __packed;
-
 struct cc33xx_cmd_stop_channel_switch {
 	struct cc33xx_cmd_header header;
 
@@ -624,7 +573,7 @@ struct cc33xx_cmd_cal_p2g {
 	u8 padding2;
 } __packed;
 
-struct cmd_channel_switch {
+struct cc33xx_cmd_channel_switch {
 	struct cc33xx_cmd_header header;
 
 	u8 role_id;
@@ -644,28 +593,11 @@ struct cmd_channel_switch {
 	u8 padding[2];
 } __packed;
 
-struct cmd_set_bd_addr {
+struct cc33xx_cmd_set_bd_addr {
 	struct cc33xx_cmd_header header;
 
 	u8 bd_addr[ETH_ALEN];
 	u8 padding[2];
-} __packed;
-
-struct cmd_dfs_master_restart {
-	struct cc33xx_cmd_header header;
-
-	u8 role_id;
-	u8 padding[3];
-} __packed;
-
-/* cac_start and cac_stop share the same params */
-struct cmd_cac_start {
-	struct cc33xx_cmd_header header;
-
-	u8 role_id;
-	u8 channel;
-	u8 band;
-	u8 bandwidth;
 } __packed;
 
 /* PLT structs */

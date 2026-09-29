@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __EVENT_H__
@@ -51,19 +51,10 @@ enum {
 	FW_LOGGER_INDICATION                     = BIT(25),
 };
 
-/* events the driver might want to wait for */
-enum cc33xx_wait_event {
-	CC33XX_EVENT_ROLE_STOP_COMPLETE,
-	CC33XX_EVENT_PEER_REMOVE_COMPLETE,
-	CC33XX_EVENT_DFS_CONFIG_COMPLETE
-};
-
 #define NUM_OF_RSSI_SNR_TRIGGERS 8
 
 struct cc33xx;
 
-int cc33xx_wait_for_event(struct cc33xx *cc, enum cc33xx_wait_event event,
-			  bool *timeout);
 void deffer_event(struct cc33xx *cc, const void *event_payload, size_t event_length);
 void process_deferred_events(struct cc33xx *cc);
 void flush_deferred_event_list(struct cc33xx *cc);

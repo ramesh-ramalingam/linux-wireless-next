@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include <linux/firmware.h>
@@ -56,18 +56,17 @@ static int cc33xx_ap_init_templates(struct cc33xx *cc,
 	return 0;
 }
 
-static void cc33xx_set_ba_policies(struct cc33xx *cc, struct cc33xx_vif *wlvif)
+static void cc33xx_set_ba_policies(struct cc33xx_vif *wlvif)
 {
 	/* Reset the BA RX indicators */
 	wlvif->ba_allowed = true;
-	cc->ba_rx_session_count = 0;
 
 	/* BA is supported in STA/AP modes */
-	wlvif->ba_support = (wlvif->bss_type != BSS_TYPE_AP_BSS &&
-				wlvif->bss_type != BSS_TYPE_STA_BSS);
+	wlvif->ba_support = (wlvif->bss_type == BSS_TYPE_AP_BSS ||
+				wlvif->bss_type == BSS_TYPE_STA_BSS);
 }
 
-/* vif-specifc initialization */
+/* vif-specific initialization */
 static int cc33xx_init_sta_role(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 {
 	int ret = cc33xx_acx_group_address_tbl(cc, true, NULL, 0);
@@ -92,11 +91,6 @@ static int cc33xx_init_ap_role(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 	ret = cc33xx_acx_tx_power(cc, wlvif, wlvif->power_level);
 	if (ret < 0)
 		return ret;
-
-	if (cc->radar_debug_mode)
-		cc33xx_cmd_generic_cfg(cc, wlvif,
-				       CC33XX_CFG_FEATURE_RADAR_DEBUG,
-				       cc->radar_debug_mode, 0);
 
 	return 0;
 }
@@ -178,38 +172,39 @@ int cc33xx_init_vif_specific(struct cc33xx *cc, struct ieee80211_vif *vif)
 	if (ret < 0)
 		return ret;
 
-	/* Configure initiator BA sessions policies */
-	cc33xx_set_ba_policies(cc, wlvif);
+	/* Configure BA sessions policies */
+	cc33xx_set_ba_policies(wlvif);
 
 	return 0;
 }
 
 int cc33xx_hw_init(struct cc33xx *cc)
 {
-	cc33xx_acx_init_mem_config(cc);
+	int ret;
 
 	cc->last_fw_rls_idx = 0;
 	cc->partial_rx.status = CURR_RX_START;
-	return 0;
+
+	ret = cc33xx_acx_init_mem_config(cc);
+
+	return ret;
 }
 
 int cc33xx_download_ini_params_and_wait(struct cc33xx *cc)
 {
-	struct cc33xx_cmd_ini_params_download *cmd;
+	struct cc33xx_cmd_ini_params_download *cmd __free(kfree) = NULL;
 	size_t command_size = ALIGN((sizeof(*cmd) + sizeof(cc->conf)), 4);
 	int ret;
 
-	cc33xx_set_max_buffer_size(cc, INI_MAX_BUFFER_SIZE);
-
-	cc33xx_debug(DEBUG_ACX,
-		     "Downloading INI configurations to FW, payload Length: %zu",
+	cc33xx_debug(cc->dev, DEBUG_ACX,
+		     "Downloading INI configurations to FW, payload Length: %zu\n",
 		     sizeof(cc->conf));
 
 	cmd = kzalloc(command_size, GFP_KERNEL);
-	if (!cmd) {
-		cc33xx_set_max_buffer_size(cc, CMD_MAX_BUFFER_SIZE);
+	if (!cmd)
 		return -ENOMEM;
-	}
+
+	cc33xx_set_max_buffer_size(cc, INI_MAX_BUFFER_SIZE);
 
 	cmd->length = cpu_to_le32(sizeof(cc->conf));
 
@@ -219,13 +214,12 @@ int cc33xx_download_ini_params_and_wait(struct cc33xx *cc)
 	ret = cc33xx_cmd_send(cc, CMD_DOWNLOAD_INI_PARAMS,
 			      cmd, command_size, 0);
 	if (ret < 0) {
-		cc33xx_warning("download INI params to FW command sending failed: %d",
-			       ret);
+		dev_warn(cc->dev, "download INI params to FW command sending failed: %d\n",
+			 ret);
 	} else {
-		cc33xx_debug(DEBUG_BOOT, "INI Params downloaded successfully");
+		cc33xx_debug(cc->dev, DEBUG_BOOT, "INI Params downloaded successfully\n");
 	}
 
 	cc33xx_set_max_buffer_size(cc, CMD_MAX_BUFFER_SIZE);
-	kfree(cmd);
 	return ret;
 }

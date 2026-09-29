@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __DEBUG_H__
@@ -31,8 +31,8 @@ enum {
 	DEBUG_AP		= BIT(17),
 	DEBUG_PROBE		= BIT(18),
 	DEBUG_IO		= BIT(19),
-	DEBUG_MASTER		= (DEBUG_ADHOC | DEBUG_AP),
-	DEBUG_CC33xx		= BIT(20),
+	DEBUG_MASTER		= DEBUG_AP,
+	DEBUG_CC33XX		= BIT(20),
 	DEBUG_ALL		= GENMASK(31, 0),
 	DEBUG_NO_DATAPATH = (DEBUG_ALL & ~DEBUG_IRQ & ~DEBUG_TX & ~DEBUG_RX & ~DEBUG_CORE_STATUS),
 };
@@ -41,31 +41,12 @@ extern u32 cc33xx_debug_level;
 
 #define DEBUG_DUMP_LIMIT 1024
 
-#define cc33xx_error(fmt, arg...) \
-	pr_err(DRIVER_PREFIX "ERROR " fmt "\n", ##arg)
-
-#define cc33xx_warning(fmt, arg...) \
-	pr_warn(DRIVER_PREFIX "WARNING " fmt "\n", ##arg)
-
-#define cc33xx_notice(fmt, arg...) \
-	pr_info(DRIVER_PREFIX fmt "\n", ##arg)
-
-#define cc33xx_info(fmt, arg...) \
-	pr_info(DRIVER_PREFIX fmt "\n", ##arg)
-
 /* define the debug macro differently if dynamic debug is supported */
 #if defined(CONFIG_DYNAMIC_DEBUG)
-#define cc33xx_debug(level, fmt, arg...) \
+#define cc33xx_debug(dev, level, fmt, arg...) \
 	do { \
 		if (unlikely((level) & cc33xx_debug_level)) \
-			dynamic_pr_debug(DRIVER_PREFIX fmt "\n", ##arg); \
-	} while (0)
-#else
-#define cc33xx_debug(level, fmt, arg...) \
-	do { \
-		if (unlikely((level) & cc33xx_debug_level)) \
-			pr_debug(pr_fmt(DRIVER_PREFIX fmt "\n"), \
-			       ##arg); \
+			dev_dbg(dev, fmt, ##arg); \
 	} while (0)
 #endif /* CONFIG_DYNAMIC_DEBUG */
 

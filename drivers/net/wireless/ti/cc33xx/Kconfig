@@ -14,7 +14,7 @@ config CC33XX
 
 config CC33XX_SDIO
 	tristate "TI CC33XX SDIO support"
-	depends on CC33XX && MMC
+	depends on CC33XX && MMC && OF
 	help
 	  This module adds support for the SDIO interface of adapters using
 	  TI CC33XX WLAN chipsets.  Select this if your platform is using

@@ -1,152 +1,110 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include "acx.h"
 
 int cc33xx_acx_clear_statistics(struct cc33xx *cc)
 {
-	struct acx_header *acx;
+	struct acx_header *acx __free(kfree) = NULL;
 	int ret = 0;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	ret = cc33xx_cmd_configure(cc, ACX_CLEAR_STATISTICS, acx, sizeof(*acx));
-	if (ret < 0) {
-		cc33xx_warning("failed to clear firmware statistics: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "failed to clear firmware statistics: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
-int cc33xx_acx_wake_up_conditions(struct cc33xx *cc, struct cc33xx_vif *wlvif,
-				  u8 wake_up_event, u8 listen_interval)
+int cc33xx_acx_wake_up_conditions(struct cc33xx *cc, u8 wake_up_event,
+				  u8 listen_interval)
 {
-	struct acx_wake_up_condition *wake_up;
+	struct acx_wake_up_condition *wake_up __free(kfree) = NULL;
 	int ret;
 
-	wake_up = kzalloc(sizeof(*wake_up), GFP_KERNEL);
-	if (!wake_up) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	wake_up = kzalloc_obj(*wake_up);
+	if (!wake_up)
+		return -ENOMEM;
 
 	wake_up->wake_up_event = wake_up_event;
 	wake_up->listen_interval = listen_interval;
 
 	ret = cc33xx_cmd_configure(cc, WAKE_UP_CONDITIONS_CFG,
 				   wake_up, sizeof(*wake_up));
-	if (ret < 0) {
-		cc33xx_warning("could not set wake up conditions: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "could not set wake up conditions: %d\n", ret);
 
-out:
-	kfree(wake_up);
 	return ret;
 }
 
 int cc33xx_acx_sleep_auth(struct cc33xx *cc, u8 sleep_auth)
 {
-	struct acx_sleep_auth *auth;
+	struct acx_sleep_auth *auth __free(kfree) = NULL;
 	int ret;
 
-	auth = kzalloc(sizeof(*auth), GFP_KERNEL);
-	if (!auth) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	auth = kzalloc_obj(*auth);
+	if (!auth)
+		return -ENOMEM;
 
 	auth->sleep_auth = sleep_auth;
 
 	ret = cc33xx_cmd_configure(cc, ACX_SLEEP_AUTH, auth, sizeof(*auth));
 	if (ret < 0) {
-		cc33xx_error("could not configure sleep_auth to %d: %d",
-			     sleep_auth, ret);
-		goto out;
+		dev_err(cc->dev, "could not configure sleep_auth to %d: %d\n",
+			sleep_auth, ret);
+		return ret;
 	}
 
 	cc->sleep_auth = sleep_auth;
-out:
-	kfree(auth);
-	return ret;
-}
 
-int cc33xx_ble_enable(struct cc33xx *cc, u8 ble_enable)
-{
-	struct debug_header *buf;
-	int ret;
-
-	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
-	if (!buf) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	ret = cc33xx_cmd_debug(cc, BLE_ENABLE, buf, sizeof(*buf));
-	if (ret < 0) {
-		cc33xx_error("could not enable ble");
-		goto out;
-	}
-
-	cc->ble_enable = 1;
-out:
-	kfree(buf);
 	return ret;
 }
 
 int cc33xx_acx_tx_power(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			int power)
 {
-	struct acx_tx_power_cfg *acx;
+	struct acx_tx_power_cfg *acx __free(kfree) = NULL;
 	int ret;
 
 	if (power < CC33XX_MIN_TXPWR) {
-		cc33xx_warning("Configured Tx power %d dBm. Increasing to minimum %d dBm",
-			       power, CC33XX_MIN_TXPWR);
+		dev_warn(cc->dev, "Configured Tx power %d dBm. Increasing to minimum %d dBm\n",
+			 power, CC33XX_MIN_TXPWR);
 		power = CC33XX_MIN_TXPWR;
 	} else if (power > CC33XX_MAX_TXPWR) {
-		cc33xx_warning("Configured Tx power %d dBm is bigger than upper limit: %d dBm. Attenuating to max limit",
-			       power, CC33XX_MAX_TXPWR);
+		dev_warn(cc->dev, "Configured Tx power %d dBm is bigger than upper limit: %d dBm. Attenuating to max limit\n",
+			 power, CC33XX_MAX_TXPWR);
 		power = CC33XX_MAX_TXPWR;
 	}
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->role_id = wlvif->role_id;
 	acx->tx_power = power;
 
 	ret = cc33xx_cmd_configure(cc, TX_POWER_CFG, acx, sizeof(*acx));
 	if (ret < 0) {
-		cc33xx_warning("Configure of tx power failed: %d", ret);
-		goto out;
+		dev_warn(cc->dev, "Configure of tx power failed: %d\n", ret);
+		return ret;
 	}
 
 	wlvif->power_level = power;
 
-out:
-	kfree(acx);
 	return ret;
 }
 
 static int cc33xx_acx_mem_map(struct cc33xx *cc,
-			      struct acx_header *memeroy_map, size_t len)
+			      struct acx_header *memory_map, size_t len)
 {
 	int ret;
 
-	ret = cc33xx_cmd_interrogate(cc, MEM_MAP_INTR, memeroy_map,
+	ret = cc33xx_cmd_interrogate(cc, MEM_MAP_INTR, memory_map,
 				     sizeof(struct acx_header), len);
 	if (ret < 0)
 		return ret;
@@ -164,45 +122,38 @@ static int cc33xx_acx_get_fw_versions(struct cc33xx *cc,
 				     sizeof(struct cc33xx_acx_fw_versions), len);
 	if (ret < 0)
 		return ret;
+
 	return 0;
 }
 
 int cc33xx_acx_slot(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 		    enum acx_slot_type slot_time)
 {
-	struct acx_slot *slot;
+	struct acx_slot *slot __free(kfree) = NULL;
 	int ret;
 
-	slot = kzalloc(sizeof(*slot), GFP_KERNEL);
-	if (!slot) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	slot = kzalloc_obj(*slot);
+	if (!slot)
+		return -ENOMEM;
 
 	slot->role_id = wlvif->role_id;
 	slot->slot_time = slot_time;
+
 	ret = cc33xx_cmd_configure(cc, SLOT_CFG, slot, sizeof(*slot));
+	if (ret < 0)
+		dev_warn(cc->dev, "failed to set slot time: %d\n", ret);
 
-	if (ret < 0) {
-		cc33xx_warning("failed to set slot time: %d", ret);
-		goto out;
-	}
-
-out:
-	kfree(slot);
 	return ret;
 }
 
 int cc33xx_acx_group_address_tbl(struct cc33xx *cc, bool enable, void *mc_list, u32 mc_list_len)
 {
-	struct acx_dot11_grp_addr_tbl *acx;
+	struct acx_dot11_grp_addr_tbl *acx __free(kfree) = NULL;
 	int ret;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->enabled = enable;
 	acx->num_groups = mc_list_len;
@@ -210,30 +161,25 @@ int cc33xx_acx_group_address_tbl(struct cc33xx *cc, bool enable, void *mc_list, 
 
 	ret = cc33xx_cmd_configure(cc, DOT11_GROUP_ADDRESS_TBL,
 				   acx, sizeof(*acx));
-	if (ret < 0) {
-		cc33xx_warning("failed to set group addr table: %d", ret);
-		goto out;
-	}
-out:
-	kfree(acx);
+	if (ret < 0)
+		dev_warn(cc->dev, "failed to set group addr table: %d\n", ret);
+
 	return ret;
 }
 
 int cc33xx_acx_beacon_filter_opt(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 				 bool enable_filter)
 {
-	struct acx_beacon_filter_option *beacon_filter = NULL;
+	struct acx_beacon_filter_option *beacon_filter __free(kfree) = NULL;
 	int ret = 0;
 
 	if (enable_filter &&
 	    cc->conf.host_conf.conn.bcn_filt_mode == CONF_BCN_FILT_MODE_DISABLED)
-		goto out;
+		return 0;
 
-	beacon_filter = kzalloc(sizeof(*beacon_filter), GFP_KERNEL);
-	if (!beacon_filter) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	beacon_filter = kzalloc_obj(*beacon_filter);
+	if (!beacon_filter)
+		return -ENOMEM;
 
 	beacon_filter->role_id = wlvif->role_id;
 	beacon_filter->enable = enable_filter;
@@ -245,19 +191,15 @@ int cc33xx_acx_beacon_filter_opt(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 
 	ret = cc33xx_cmd_configure(cc, BEACON_FILTER_OPT,
 				   beacon_filter, sizeof(*beacon_filter));
-	if (ret < 0) {
-		cc33xx_warning("failed to set beacon filter opt: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "failed to set beacon filter opt: %d\n", ret);
 
-out:
-	kfree(beacon_filter);
 	return ret;
 }
 
 int cc33xx_acx_beacon_filter_table(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 {
-	struct acx_beacon_filter_ie_table *ie_table;
+	struct acx_beacon_filter_ie_table *ie_table __free(kfree) = NULL;
 	struct conf_bcn_filt_rule *r = &cc->conf.host_conf.conn.bcn_filt_ie0;
 	struct conf_bcn_filt_rule *itr_end;
 	int idx = 0;
@@ -269,11 +211,9 @@ int cc33xx_acx_beacon_filter_table(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 
 	itr_end = r + cc->conf.host_conf.conn.bcn_filt_ie_count;
 
-	ie_table = kzalloc(sizeof(*ie_table), GFP_KERNEL);
-	if (!ie_table) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	ie_table = kzalloc_obj(*ie_table);
+	if (!ie_table)
+		return -ENOMEM;
 
 	/* configure default beacon pass-through rules */
 	ie_table->role_id = wlvif->role_id;
@@ -283,11 +223,8 @@ int cc33xx_acx_beacon_filter_table(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 		ie_table->table[idx++] = r->ie;
 		ie_table->table[idx++] = r->rule;
 
-		if (r->ie == WLAN_EID_VENDOR_SPECIFIC) {
-			/* only one vendor specific ie allowed */
-			if (vendor_spec)
-				continue;
-
+		/* only one vendor specific ie allowed */
+		if (r->ie == WLAN_EID_VENDOR_SPECIFIC && !vendor_spec) {
 			/* for vendor specific rules configure the
 			 * additional fields
 			 */
@@ -307,27 +244,21 @@ int cc33xx_acx_beacon_filter_table(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 
 	ret = cc33xx_cmd_configure(cc, BEACON_FILTER_TABLE,
 				   ie_table, sizeof(*ie_table));
-	if (ret < 0) {
-		cc33xx_warning("failed to set beacon filter table: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "failed to set beacon filter table: %d\n", ret);
 
-out:
-	kfree(ie_table);
 	return ret;
 }
 
 int cc33xx_assoc_info_cfg(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			  struct ieee80211_sta *sta, u16 aid)
 {
-	struct assoc_info_cfg *cfg;
+	struct assoc_info_cfg *cfg __free(kfree) = NULL;
 	int ret;
 
-	cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
-	if (!cfg) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	cfg = kzalloc_obj(*cfg);
+	if (!cfg)
+		return -ENOMEM;
 
 	cfg->role_id = wlvif->role_id;
 	cfg->aid = cpu_to_le16(aid);
@@ -341,65 +272,49 @@ int cc33xx_assoc_info_cfg(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	cfg->has_he = sta->deflink.he_cap.has_he;
 	memcpy(cfg->transmitter_bssid, wlvif->transmitter_bssid, ETH_ALEN);
 	ret = cc33xx_cmd_configure(cc, ASSOC_INFO_CFG, cfg, sizeof(*cfg));
-	if (ret < 0) {
-		cc33xx_warning("failed to set aid: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "failed to set aid: %d\n", ret);
 
-out:
-	kfree(cfg);
 	return ret;
 }
 
 int cc33xx_acx_set_preamble(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			    enum acx_preamble_type preamble)
 {
-	struct acx_preamble *acx;
+	struct acx_preamble *acx __free(kfree) = NULL;
 	int ret;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->role_id = wlvif->role_id;
 	acx->preamble = preamble;
 
 	ret = cc33xx_cmd_configure(cc, PREAMBLE_TYPE_CFG, acx, sizeof(*acx));
-	if (ret < 0) {
-		cc33xx_warning("Setting of preamble failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "Setting of preamble failed: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
 int cc33xx_acx_cts_protect(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			   enum acx_ctsprotect_type ctsprotect)
 {
-	struct acx_ctsprotect *acx;
+	struct acx_ctsprotect *acx __free(kfree) = NULL;
 	int ret;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->role_id = wlvif->role_id;
 	acx->ctsprotect = ctsprotect;
 
 	ret = cc33xx_cmd_configure(cc, CTS_PROTECTION_CFG, acx, sizeof(*acx));
-	if (ret < 0) {
-		cc33xx_warning("Setting of ctsprotect failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "Setting of ctsprotect failed: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
@@ -411,7 +326,7 @@ int cc33xx_acx_statistics(struct cc33xx *cc, void *stats)
 				     sizeof(struct acx_header),
 				     sizeof(struct cc33xx_acx_statistics));
 	if (ret < 0) {
-		cc33xx_warning("acx statistics failed: %d", ret);
+		dev_warn(cc->dev, "acx statistics failed: %d\n", ret);
 		return -ENOMEM;
 	}
 
@@ -421,27 +336,20 @@ int cc33xx_acx_statistics(struct cc33xx *cc, void *stats)
 int cc33xx_update_ap_rates(struct cc33xx *cc, u8 role_id,
 			   u32 basic_rates_set, u32 supported_rates)
 {
-	struct ap_rates_class_cfg *cfg;
+	struct ap_rates_class_cfg *cfg __free(kfree) = NULL;
 	int ret;
 
-	cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
-
-	if (!cfg) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	cfg = kzalloc_obj(*cfg);
+	if (!cfg)
+		return -ENOMEM;
 
 	cfg->basic_rates_set = cpu_to_le32(basic_rates_set);
 	cfg->supported_rates = cpu_to_le32(supported_rates);
 	cfg->role_id = role_id;
 	ret = cc33xx_cmd_configure(cc, AP_RATES_CFG, cfg, sizeof(*cfg));
-	if (ret < 0) {
-		cc33xx_warning("Updating AP Rates  failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "Updating AP Rates  failed: %d\n", ret);
 
-out:
-	kfree(cfg);
 	return ret;
 }
 
@@ -450,15 +358,13 @@ int cc33xx_tx_param_cfg(struct cc33xx *cc, struct cc33xx_vif *wlvif, u8 ac,
 			u8 ps_scheme, u8 is_mu_edca, u8 mu_edca_aifs,
 			u8 mu_edca_ecw_min_max, u8 mu_edca_timer)
 {
-	struct tx_param_cfg *cfg;
+	struct tx_param_cfg *cfg __free(kfree) = NULL;
 	int ret = 0;
 
-	cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
+	cfg = kzalloc_obj(*cfg);
 
-	if (!cfg) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (!cfg)
+		return -ENOMEM;
 
 	cfg->role_id = wlvif->role_id;
 	cfg->ac = ac;
@@ -474,13 +380,9 @@ int cc33xx_tx_param_cfg(struct cc33xx *cc, struct cc33xx_vif *wlvif, u8 ac,
 	cfg->mu_edca_timer = mu_edca_timer;
 
 	ret = cc33xx_cmd_configure(cc, TX_PARAMS_CFG, cfg, sizeof(*cfg));
-	if (ret < 0) {
-		cc33xx_warning("tx param cfg failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "tx param cfg failed: %d\n", ret);
 
-out:
-	kfree(cfg);
 	return ret;
 }
 
@@ -488,10 +390,9 @@ int cc33xx_acx_init_mem_config(struct cc33xx *cc)
 {
 	int ret;
 
-	cc->target_mem_map = kzalloc(sizeof(*cc->target_mem_map),
-				     GFP_KERNEL);
+	cc->target_mem_map = kzalloc_obj(*cc->target_mem_map);
 	if (!cc->target_mem_map) {
-		cc33xx_error("couldn't allocate target memory map");
+		dev_err(cc->dev, "couldn't allocate target memory map\n");
 		return -ENOMEM;
 	}
 
@@ -499,7 +400,7 @@ int cc33xx_acx_init_mem_config(struct cc33xx *cc)
 	ret = cc33xx_acx_mem_map(cc, (void *)cc->target_mem_map,
 				 sizeof(struct cc33xx_acx_mem_map));
 	if (ret < 0) {
-		cc33xx_error("couldn't retrieve firmware memory map");
+		dev_err(cc->dev, "couldn't retrieve firmware memory map\n");
 		kfree(cc->target_mem_map);
 		cc->target_mem_map = NULL;
 		return ret;
@@ -516,21 +417,28 @@ int cc33xx_acx_init_get_fw_versions(struct cc33xx *cc)
 {
 	int ret;
 
-	cc->fw_ver = kzalloc(sizeof(*cc->fw_ver),
-			     GFP_KERNEL);
-	if (!cc->fw_ver) {
-		cc33xx_error("couldn't allocate cc33xx_acx_fw_versions");
+	struct cc33xx_acx_fw_versions *fw_ver __free(kfree) = NULL;
+
+	fw_ver = kzalloc_obj(*fw_ver);
+	if (!fw_ver) {
+		dev_err(cc->dev, "couldn't allocate cc33xx_acx_fw_versions\n");
 		return -ENOMEM;
 	}
 
-	ret = cc33xx_acx_get_fw_versions(cc, (void *)cc->fw_ver,
+	ret = cc33xx_acx_get_fw_versions(cc, fw_ver,
 					 sizeof(struct cc33xx_acx_fw_versions));
 	if (ret < 0) {
-		cc33xx_error("couldn't retrieve firmware versions");
-		kfree(cc->fw_ver);
-		cc->fw_ver = NULL;
+		dev_err(cc->dev, "couldn't retrieve firmware versions\n");
 		return ret;
 	}
+
+	cc->fw_ver.major_version = le16_to_cpu(fw_ver->major_version);
+	cc->fw_ver.minor_version = le16_to_cpu(fw_ver->minor_version);
+	cc->fw_ver.api_version   = le16_to_cpu(fw_ver->api_version);
+	cc->fw_ver.build_version = le16_to_cpu(fw_ver->build_version);
+
+	memcpy(cc->fw_ver.phy_version, fw_ver->phy_version,
+	       sizeof(cc->fw_ver.phy_version));
 
 	return 0;
 }
@@ -539,14 +447,12 @@ int cc33xx_acx_set_ht_information(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 				  u16 ht_operation_mode, u32 he_oper_params,
 				  u16 he_oper_nss_set)
 {
-	struct cc33xx_acx_ht_information *acx;
+	struct cc33xx_acx_ht_information *acx __free(kfree) = NULL;
 	int ret = 0;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->role_id = wlvif->role_id;
 	acx->ht_protection =
@@ -562,13 +468,9 @@ int cc33xx_acx_set_ht_information(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	acx->qos_info_more_data_ack_bit = 0;
 	ret = cc33xx_cmd_configure(cc, BSS_OPERATION_CFG, acx, sizeof(*acx));
 
-	if (ret < 0) {
-		cc33xx_warning("acx ht information setting failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "acx ht information setting failed: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
@@ -576,14 +478,12 @@ out:
 int cc33xx_acx_set_ba_receiver_session(struct cc33xx *cc, u8 tid_index, u16 ssn,
 				       bool enable, u8 peer_hlid, u8 win_size)
 {
-	struct cc33xx_acx_ba_receiver_setup *acx;
+	struct cc33xx_acx_ba_receiver_setup *acx __free(kfree) = NULL;
 	int ret;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->hlid = peer_hlid;
 	acx->tid = tid_index;
@@ -595,55 +495,27 @@ int cc33xx_acx_set_ba_receiver_session(struct cc33xx *cc, u8 tid_index, u16 ssn,
 					    acx, sizeof(*acx),
 					    BIT(CMD_STATUS_NO_RX_BA_SESSION));
 	if (ret < 0) {
-		cc33xx_warning("acx ba receiver session failed: %d", ret);
-		goto out;
+		dev_warn(cc->dev, "acx ba receiver session failed: %d\n", ret);
+		return ret;
 	}
 
 	/* sometimes we can't start the session */
 	if (ret == CMD_STATUS_NO_RX_BA_SESSION) {
-		cc33xx_warning("no fw rx ba on tid %d", tid_index);
-		ret = -EBUSY;
-		goto out;
+		dev_warn(cc->dev, "no fw rx ba on tid %d\n", tid_index);
+		return -EBUSY;
 	}
 
-	ret = 0;
-out:
-	kfree(acx);
-	return ret;
-}
-
-int cc33xx_acx_tsf_info(struct cc33xx *cc,
-			struct cc33xx_vif *wlvif, u64 *mactime)
-{
-	struct cc33xx_acx_fw_tsf_information *tsf_info;
-	int ret = 0;
-
-	tsf_info = kzalloc(sizeof(*tsf_info), GFP_KERNEL);
-	if (!tsf_info) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	tsf_info->role_id = wlvif->role_id;
-
-	*mactime = le32_to_cpu(tsf_info->current_tsf_low) |
-		((u64)le32_to_cpu(tsf_info->current_tsf_high) << 32);
-
-out:
-	kfree(tsf_info);
-	return ret;
+	return 0;
 }
 
 int cc33xx_acx_config_ps(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 {
-	struct cc33xx_acx_config_ps *config_ps;
+	struct cc33xx_acx_config_ps *config_ps __free(kfree) = NULL;
 	int ret;
 
-	config_ps = kzalloc(sizeof(*config_ps), GFP_KERNEL);
-	if (!config_ps) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	config_ps = kzalloc_obj(*config_ps);
+	if (!config_ps)
+		return -ENOMEM;
 
 	config_ps->exit_retries = cc->conf.host_conf.conn.psm_exit_retries;
 	config_ps->enter_retries = cc->conf.host_conf.conn.psm_entry_retries;
@@ -651,43 +523,33 @@ int cc33xx_acx_config_ps(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 
 	ret = cc33xx_cmd_configure(cc, ACX_CONFIG_PS, config_ps,
 				   sizeof(*config_ps));
+	if (ret < 0)
+		dev_warn(cc->dev, "acx config ps failed: %d\n", ret);
 
-	if (ret < 0) {
-		cc33xx_warning("acx config ps failed: %d", ret);
-		goto out;
-	}
-
-out:
-	kfree(config_ps);
 	return ret;
 }
 
 int cc33xx_acx_average_rssi(struct cc33xx *cc,
 			    struct cc33xx_vif *wlvif, s8 *avg_rssi)
 {
-	struct acx_roaming_stats *acx;
+	struct acx_roaming_stats *acx __free(kfree) = NULL;
 	int ret = 0;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->role_id = wlvif->role_id;
 
 	ret = cc33xx_cmd_interrogate(cc, RSSI_INTR,
 				     acx, sizeof(*acx), sizeof(*acx));
 	if (ret	< 0) {
-		cc33xx_warning("acx roaming statistics failed: %d", ret);
-		ret = -ENOMEM;
-		goto out;
+		dev_warn(cc->dev, "acx roaming statistics failed: %d\n", ret);
+		return ret;
 	}
 
 	*avg_rssi = acx->rssi_beacon;
 
-out:
-	kfree(acx);
 	return ret;
 }
 
@@ -698,23 +560,20 @@ static const u16 cc33xx_idx_to_rate_100kbps[] = {
 int cc33xx_acx_get_tx_rate(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			   struct station_info *sinfo)
 {
-	struct acx_preamble_and_tx_rate *acx;
+	struct acx_preamble_and_tx_rate *acx __free(kfree) = NULL;
 	int ret;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	acx->role_id = wlvif->role_id;
 
 	ret = cc33xx_cmd_interrogate(cc, GET_PREAMBLE_AND_TX_RATE_INTR,
 				     acx, sizeof(*acx), sizeof(*acx));
 	if (ret	< 0) {
-		cc33xx_warning("acx get preamble and tx rate failed: %d", ret);
-		ret = -ENOMEM;
-		goto out;
+		dev_warn(cc->dev, "acx get preamble and tx rate failed: %d\n", ret);
+		return ret;
 	}
 
 	sinfo->txrate.flags = 0;
@@ -740,8 +599,6 @@ int cc33xx_acx_get_tx_rate(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	sinfo->txrate.n_bonded_ch = 0;
 	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
@@ -750,10 +607,10 @@ out:
 int cc33xx_acx_default_rx_filter_enable(struct cc33xx *cc, bool enable,
 					enum rx_filter_action action)
 {
-	struct acx_default_rx_filter *acx;
+	struct acx_default_rx_filter *acx __free(kfree) = NULL;
 	int ret;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
+	acx = kzalloc_obj(*acx);
 	if (!acx)
 		return -ENOMEM;
 
@@ -763,13 +620,9 @@ int cc33xx_acx_default_rx_filter_enable(struct cc33xx *cc, bool enable,
 
 	ret = cc33xx_cmd_configure(cc, ACX_ENABLE_RX_DATA_FILTER, acx,
 				   sizeof(*acx));
-	if (ret < 0) {
-		cc33xx_warning("acx default rx filter enable failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "acx default rx filter enable failed: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
@@ -808,7 +661,7 @@ static void cc33xx_rx_filter_flatten_fields(struct cc33xx_rx_filter *filter,
 int cc33xx_acx_set_rx_filter(struct cc33xx *cc, u8 index, bool enable,
 			     struct cc33xx_rx_filter *filter)
 {
-	struct acx_rx_filter_cfg *acx;
+	struct acx_rx_filter_cfg *acx __free(kfree) = NULL;
 	int fields_size = 0;
 	int acx_size;
 	int ret;
@@ -821,7 +674,6 @@ int cc33xx_acx_set_rx_filter(struct cc33xx *cc, u8 index, bool enable,
 
 	acx_size = ALIGN(sizeof(*acx) + fields_size, 4);
 	acx = kzalloc(acx_size, GFP_KERNEL);
-
 	if (!acx)
 		return -ENOMEM;
 
@@ -837,13 +689,9 @@ int cc33xx_acx_set_rx_filter(struct cc33xx *cc, u8 index, bool enable,
 	cc33xx_dump(DEBUG_ACX, "RX_FILTER: ", acx, acx_size);
 
 	ret = cc33xx_cmd_configure(cc, ACX_SET_RX_DATA_FILTER, acx, acx_size);
-	if (ret < 0) {
-		cc33xx_warning("setting rx filter failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "setting rx filter failed: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 #endif /* CONFIG_PM */
@@ -856,20 +704,18 @@ int cc33xx_acx_set_peer_cap(struct cc33xx *cc,
 			    struct ieee80211_sta_ht_cap *ht_cap,
 			    struct ieee80211_sta_he_cap *he_cap,
 			    struct cc33xx_vif *wlvif, bool allow_ht_operation,
-			    u32 rate_set, u8 hlid)
+			    u32 rate_set)
 {
-	struct cc33xx_acx_peer_cap *acx;
+	struct cc33xx_acx_peer_cap *acx __free(kfree) = NULL;
 	int ret = 0;
 	u32 ht_capabilites = 0;
 	u8 *cap_info = NULL;
 	u8 dcm_max_const_rx_mask = IEEE80211_HE_PHY_CAP3_DCM_MAX_CONST_RX_MASK;
 	u8 partial_bw_ext_range = IEEE80211_HE_PHY_CAP6_PARTIAL_BW_EXT_RANGE;
 
-	acx = kzalloc(sizeof(*acx), GFP_KERNEL);
-	if (!acx) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	acx = kzalloc_obj(*acx);
+	if (!acx)
+		return -ENOMEM;
 
 	if (allow_ht_operation && ht_cap->ht_supported) {
 		/* no need to translate capabilities - use the spec values */
@@ -898,34 +744,24 @@ int cc33xx_acx_set_peer_cap(struct cc33xx *cc,
 	acx->er_upper_supported = ((cap_info[6] & partial_bw_ext_range) != 0);
 	ret = cc33xx_cmd_configure(cc, PEER_CAP_CFG, acx, sizeof(*acx));
 
-	if (ret < 0) {
-		cc33xx_warning("acx ht capabilities setting failed: %d", ret);
-		goto out;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "acx ht capabilities setting failed: %d\n", ret);
 
-out:
-	kfree(acx);
 	return ret;
 }
 
 int cc33xx_acx_trigger_fw_assert(struct cc33xx *cc)
 {
-	struct debug_header *buf;
+	struct debug_header *buf __free(kfree) = NULL;
 	int ret;
 
-	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
-	if (!buf) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	buf = kzalloc_obj(*buf);
+	if (!buf)
+		return -ENOMEM;
 
 	ret = cc33xx_cmd_debug(cc, TRIGGER_FW_ASSERT, buf, sizeof(*buf));
-	if (ret < 0) {
-		cc33xx_error("failed to trigger firmware assert");
-		goto out;
-	}
+	if (ret < 0)
+		dev_err(cc->dev, "failed to trigger firmware assert\n");
 
-out:
-	kfree(buf);
 	return ret;
 }

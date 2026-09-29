@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include "acx.h"
@@ -8,8 +8,6 @@
 #include "ps.h"
 #include "io.h"
 #include "scan.h"
-
-#define CC33XX_WAIT_EVENT_FAST_POLL_COUNT 20
 
 struct cc33xx_event_mailbox {
 	__le32 events_vector;
@@ -92,7 +90,7 @@ void deffer_event(struct cc33xx *cc,
 	if (WARN_ON(event_length != sizeof(event_node->event_data)))
 		return;
 
-	event_node = kzalloc(sizeof(*event_node), GFP_KERNEL);
+	event_node = kzalloc_obj(*event_node);
 	if (WARN_ON(!event_node))
 		return;
 
@@ -125,77 +123,14 @@ void flush_deferred_event_list(struct cc33xx *cc)
 	}
 }
 
-static int wait_for_event_or_timeout(struct cc33xx *cc, u32 mask, bool *timeout)
+static void cc33xx_event_sched_scan_completed(struct cc33xx *cc)
 {
-	u32 event;
-	unsigned long timeout_time;
-	u16 poll_count = 0;
-	int ret = 0;
-	struct event_node *event_node, *tmp;
-	struct llist_node *event_list;
-	u32 vector;
-
-	*timeout = false;
-
-	timeout_time = jiffies + msecs_to_jiffies(CC33XX_EVENT_TIMEOUT);
-
-	do {
-		if (time_after(jiffies, timeout_time)) {
-			*timeout = true;
-			goto out;
-		}
-
-		poll_count++;
-		if (poll_count < CC33XX_WAIT_EVENT_FAST_POLL_COUNT)
-			usleep_range(50, 51);
-		else
-			usleep_range(1000, 5000);
-
-		vector = 0;
-		event_list = get_event_list(cc);
-		llist_for_each_entry_safe(event_node, tmp, event_list, node) {
-			vector |= le32_to_cpu(event_node->event_data.events_vector);
-		}
-
-		event  = vector & mask;
-	} while (!event);
-
-out:
-
-	return ret;
-}
-
-int cc33xx_wait_for_event(struct cc33xx *cc, enum cc33xx_wait_event event,
-			  bool *timeout)
-{
-	u32 local_event;
-
-	switch (event) {
-	case CC33XX_EVENT_PEER_REMOVE_COMPLETE:
-		local_event = PEER_REMOVE_COMPLETE_EVENT_ID;
-		break;
-
-	case CC33XX_EVENT_DFS_CONFIG_COMPLETE:
-		local_event = DFS_CHANNELS_CONFIG_COMPLETE_EVENT;
-		break;
-
-	default:
-		/* event not implemented */
-		return 0;
+	wiphy_lock(cc->hw->wiphy);
+	if (cc->sched_vif) {
+		ieee80211_sched_scan_stopped(cc->hw);
+		cc->sched_vif = NULL;
 	}
-	return wait_for_event_or_timeout(cc, local_event, timeout);
-}
-
-static void cc33xx_event_sched_scan_completed(struct cc33xx *cc, u8 status)
-{
-	if (cc->mac80211_scan_stopped) {
-		cc->mac80211_scan_stopped = false;
-	} else {
-		if (cc->sched_vif) {
-			ieee80211_sched_scan_stopped(cc->hw);
-			cc->sched_vif = NULL;
-		}
-	}
+	wiphy_unlock(cc->hw->wiphy);
 }
 
 static void cc33xx_event_channel_switch(struct cc33xx *cc,
@@ -205,6 +140,7 @@ static void cc33xx_event_channel_switch(struct cc33xx *cc,
 	struct cc33xx_vif *wlvif;
 	struct ieee80211_vif *vif;
 
+	wiphy_lock(cc->hw->wiphy);
 	cc33xx_for_each_wlvif(cc, wlvif) {
 		if (wlvif->role_id == CC33XX_INVALID_ROLE_ID ||
 		    !test_bit(wlvif->role_id, &roles_bitmap))
@@ -218,12 +154,14 @@ static void cc33xx_event_channel_switch(struct cc33xx *cc,
 
 		if (wlvif->bss_type == BSS_TYPE_STA_BSS) {
 			ieee80211_chswitch_done(vif, success, 0);
-			cancel_delayed_work(&wlvif->channel_switch_work);
+			wiphy_delayed_work_cancel(cc->hw->wiphy,
+						  &wlvif->channel_switch_work);
 		} else {
 			set_bit(WLVIF_FLAG_BEACON_DISABLED, &wlvif->flags);
 			ieee80211_csa_finish(vif, 0);
 		}
 	}
+	wiphy_unlock(cc->hw->wiphy);
 }
 
 static void cc33xx_disconnect_sta(struct cc33xx *cc, unsigned long sta_bitmap)
@@ -235,6 +173,7 @@ static void cc33xx_disconnect_sta(struct cc33xx *cc, unsigned long sta_bitmap)
 	const u8 *addr;
 	int h;
 
+	wiphy_lock(cc->hw->wiphy);
 	for_each_set_bit(h, &sta_bitmap, CC33XX_MAX_LINKS) {
 		bool found = false;
 		/* find the ap vif connected to this sta */
@@ -257,6 +196,7 @@ static void cc33xx_disconnect_sta(struct cc33xx *cc, unsigned long sta_bitmap)
 
 		rcu_read_unlock();
 	}
+	wiphy_unlock(cc->hw->wiphy);
 }
 
 static void cc33xx_event_max_tx_failure(struct cc33xx *cc,
@@ -267,8 +207,15 @@ static void cc33xx_event_max_tx_failure(struct cc33xx *cc,
 
 static void cc33xx_event_roc_complete(struct cc33xx *cc)
 {
+	wiphy_lock(cc->hw->wiphy);
 	if (cc->roc_vif)
 		ieee80211_ready_on_channel(cc->hw);
+	wiphy_unlock(cc->hw->wiphy);
+}
+
+static void cc33xx_event_peer_remove_complete(struct cc33xx *cc)
+{
+	complete(&cc->peer_remove_complete);
 }
 
 static void cc33xx_event_beacon_loss(struct cc33xx *cc,
@@ -283,6 +230,7 @@ static void cc33xx_event_beacon_loss(struct cc33xx *cc,
 
 	delay *= cc->conf.host_conf.conn.bss_lose_timeout;
 
+	wiphy_lock(cc->hw->wiphy);
 	cc33xx_for_each_wlvif_sta(cc, wlvif) {
 		if (wlvif->role_id == CC33XX_INVALID_ROLE_ID ||
 		    !test_bit(wlvif->role_id, &roles_bitmap))
@@ -300,14 +248,16 @@ static void cc33xx_event_beacon_loss(struct cc33xx *cc,
 		 * We don't want to delay the connection loss
 		 * indication any more.
 		 */
-		ieee80211_queue_delayed_work(cc->hw,
-					     &wlvif->connection_loss_work,
-					     msecs_to_jiffies(delay));
+		wiphy_delayed_work_queue(cc->hw->wiphy,
+					 &wlvif->connection_loss_work,
+					 msecs_to_jiffies(delay));
 
 		ieee80211_cqm_beacon_loss_notify(vif, GFP_KERNEL);
 	}
+	wiphy_unlock(cc->hw->wiphy);
 }
 
+/* Caller must not hold cc->mutex lock */
 void process_deferred_events(struct cc33xx *cc)
 {
 	struct event_node *event_node, *tmp;
@@ -323,13 +273,11 @@ void process_deferred_events(struct cc33xx *cc)
 
 		vector = le32_to_cpu(event_node->event_data.events_vector);
 
-		if (vector & SCAN_COMPLETE_EVENT_ID) {
-			if (cc->scan_wlvif)
-				cc33xx_scan_completed(cc, cc->scan_wlvif);
-		}
+		if (vector & SCAN_COMPLETE_EVENT_ID)
+			cc33xx_scan_completed(cc);
 
 		if (vector & PERIODIC_SCAN_COMPLETE_EVENT_ID)
-			cc33xx_event_sched_scan_completed(cc, 1);
+			cc33xx_event_sched_scan_completed(cc);
 
 		if (vector & BSS_LOSS_EVENT_ID) {
 			u16 bss_loss_bitmap = le16_to_cpu(event_data->bss_loss_bitmap);
@@ -356,6 +304,9 @@ void process_deferred_events(struct cc33xx *cc)
 
 		if (vector & REMAIN_ON_CHANNEL_COMPLETE_EVENT_ID)
 			cc33xx_event_roc_complete(cc);
+
+		if (vector & PEER_REMOVE_COMPLETE_EVENT_ID)
+			cc33xx_event_peer_remove_complete(cc);
 
 		kfree(event_node);
 	}

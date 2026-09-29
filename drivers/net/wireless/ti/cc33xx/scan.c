@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include "cc33xx.h"
@@ -240,25 +240,21 @@ static int cc33xx_cmd_build_probe_req(struct cc33xx *cc,
 				      u8 scan_type, const u8 *ssid,
 				      size_t ssid_len, const u8 *ie0,
 				      size_t ie0_len, const u8 *ie1,
-				      size_t ie1_len, bool sched_scan)
+				      size_t ie1_len)
 {
 	struct ieee80211_vif *vif = cc33xx_wlvif_to_vif(wlvif);
 	struct sk_buff *skb = NULL;
-	struct cc33xx_cmd_set_ies *cmd;
+	struct cc33xx_cmd_set_ies *cmd __free(kfree) = NULL;
 	int ret;
 
-	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
-	if (!cmd) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	cmd = kzalloc_obj(*cmd);
+	if (!cmd)
+		return -ENOMEM;
 
 	skb = ieee80211_probereq_get(cc->hw, vif->addr, ssid,
 				     ssid_len, ie0_len + ie1_len);
-	if (!skb) {
-		ret = -ENOMEM;
-		goto out_free;
-	}
+	if (!skb)
+		return -ENOMEM;
 
 	if (ie0_len)
 		skb_put_data(skb, ie0, ie0_len);
@@ -279,15 +275,10 @@ static int cc33xx_cmd_build_probe_req(struct cc33xx *cc,
 	usleep_range(10000, 11000);
 	ret = cc33xx_cmd_send(cc, CMD_SET_PROBE_IE, cmd, sizeof(*cmd), 0);
 
-	if (ret < 0) {
-		cc33xx_warning("cmd set_template failed: %d", ret);
-		goto out_free;
-	}
+	if (ret < 0)
+		dev_warn(cc->dev, "cmd set_template failed: %d\n", ret);
 
-out_free:
 	dev_kfree_skb(skb);
-	kfree(cmd);
-out:
 	return ret;
 }
 
@@ -422,11 +413,11 @@ static int cc33xx_scan_get_channels(struct cc33xx *cc,
 				 * the passive channel list
 				 */
 				(*n_pactive_ch)++;
-				cc33xx_debug(DEBUG_SCAN, "n_pactive_ch = %d",
+				cc33xx_debug(cc->dev, DEBUG_SCAN, "n_pactive_ch = %d\n",
 					     *n_pactive_ch);
 			}
 
-			cc33xx_debug(DEBUG_SCAN, "freq %d, ch. %d, flags 0x%x, power %d, min/max_dwell %d/%d%s%s",
+			cc33xx_debug(cc->dev, DEBUG_SCAN, "freq %d, ch. %d, flags 0x%x, power %d, min/max_dwell %d/%d%s%s\n",
 				     req_ch->center_freq, req_ch->hw_value,
 				     req_ch->flags, req_ch->max_power,
 				     min_dwell_time_active,
@@ -483,11 +474,11 @@ static bool cc33xx_set_scan_chan_params(struct cc33xx *cc,
 
 	cfg->passive_active = n_pactive_ch;
 
-	cc33xx_debug(DEBUG_SCAN, "2.4GHz: active %d passive %d",
+	cc33xx_debug(cc->dev, DEBUG_SCAN, "2.4GHz: active %d passive %d\n",
 		     cfg->active[0], cfg->passive[0]);
-	cc33xx_debug(DEBUG_SCAN, "5GHz: active %d passive %d",
+	cc33xx_debug(cc->dev, DEBUG_SCAN, "5GHz: active %d passive %d\n",
 		     cfg->active[1], cfg->passive[1]);
-	cc33xx_debug(DEBUG_SCAN, "DFS: %d", cfg->dfs);
+	cc33xx_debug(cc->dev, DEBUG_SCAN, "DFS: %d\n", cfg->dfs);
 
 	return  cfg->passive[0] || cfg->active[0] || cfg->passive[1] ||
 		cfg->active[1] || cfg->dfs;
@@ -496,8 +487,8 @@ static bool cc33xx_set_scan_chan_params(struct cc33xx *cc,
 static int cc33xx_scan_send(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			    struct cfg80211_scan_request *req)
 {
-	struct cc33xx_cmd_scan_params *cmd;
-	struct cc33xx_scan_channels *cmd_channels = NULL;
+	struct cc33xx_cmd_scan_params *cmd __free(kfree) = NULL;
+	struct cc33xx_scan_channels *cmd_channels __free(kfree) = NULL;
 	struct cc33xx_ssid *cmd_ssid;
 	u16 alloc_size;
 	int ret;
@@ -505,10 +496,8 @@ static int cc33xx_scan_send(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 
 	alloc_size =  sizeof(*cmd) + (sizeof(struct cc33xx_ssid) * req->n_ssids);
 	cmd = kzalloc(alloc_size, GFP_KERNEL);
-	if (!cmd) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (!cmd)
+		return -ENOMEM;
 
 	/* scan on the dev role if the regular one is not started */
 	if (cc33xx_is_p2p_mgmt(wlvif))
@@ -516,10 +505,8 @@ static int cc33xx_scan_send(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	else
 		cmd->role_id = wlvif->role_id;
 
-	if (WARN_ON(cmd->role_id == CC33XX_INVALID_ROLE_ID)) {
-		ret = -EINVAL;
-		goto out;
-	}
+	if (WARN_ON(cmd->role_id == CC33XX_INVALID_ROLE_ID))
+		return -EINVAL;
 
 	cmd->scan_type = SCAN_REQUEST_ONE_SHOT;
 	cmd->rssi_threshold = -127;
@@ -532,11 +519,9 @@ static int cc33xx_scan_send(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	WARN_ON(req->n_ssids > 1);
 
 	/* configure channels */
-	cmd_channels = kzalloc(sizeof(*cmd_channels), GFP_KERNEL);
-	if (!cmd_channels) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	cmd_channels = kzalloc_obj(*cmd_channels);
+	if (!cmd_channels)
+		return -ENOMEM;
 
 	cc33xx_set_scan_chan_params(cc, cmd_channels, req->channels,
 				    req->n_channels, req->n_ssids,
@@ -557,34 +542,28 @@ static int cc33xx_scan_send(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	ret = cc33xx_cmd_build_probe_req(cc, wlvif, cmd->role_id, cmd->scan_type,
 					 req->ssids ? req->ssids[0].ssid : NULL,
 					 req->ssids ? req->ssids[0].ssid_len : 0,
-					 req->ie, req->ie_len, NULL, 0, false);
+					 req->ie, req->ie_len, NULL, 0);
 	if (ret < 0) {
-		cc33xx_error("PROBE request template failed");
-		goto out;
+		dev_err(cc->dev, "PROBE request template failed\n");
+		return ret;
 	}
 
 	cc33xx_dump(DEBUG_SCAN, "SCAN: ", cmd, alloc_size);
 
 	ret = cc33xx_cmd_send(cc, CMD_SCAN, cmd, alloc_size, 0);
-	if (ret < 0) {
-		cc33xx_error("SCAN failed");
-		goto out;
-	}
+	if (ret < 0)
+		dev_err(cc->dev, "SCAN failed\n");
 
-out:
-	kfree(cmd_channels);
-	kfree(cmd);
 	return ret;
 }
 
-static int cc33xx_scan_sched_scan_ssid_list(struct cc33xx *cc,
-					    struct cc33xx_vif *wlvif,
-					struct cfg80211_sched_scan_request *req,
+static int cc33xx_scan_sched_scan_ssid_list(struct cc33xx_vif *wlvif,
+					    struct cfg80211_sched_scan_request *req,
 					    struct cc33xx_cmd_ssid_list *cmd)
 {
 	struct cfg80211_match_set *sets = req->match_sets;
 	struct cfg80211_ssid *ssids = req->ssids;
-	int ret = 0, i, j, n_match_ssids = 0;
+	int i, j, n_match_ssids = 0;
 
 	/* count the match sets that contain SSIDs */
 	for (i = 0; i < req->n_match_sets; i++) {
@@ -595,7 +574,7 @@ static int cc33xx_scan_sched_scan_ssid_list(struct cc33xx *cc,
 	/* No filter, no ssids or only bcast ssid */
 	if (!n_match_ssids && (!req->n_ssids ||
 			       (req->n_ssids == 1 && req->ssids[0].ssid_len == 0)))
-		goto out;
+		return 0;
 
 	cmd->role_id = wlvif->role_id;
 	if (!n_match_ssids) {
@@ -641,43 +620,34 @@ static int cc33xx_scan_sched_scan_ssid_list(struct cc33xx *cc,
 					}
 				}
 				/* Fail if SSID isn't present in the filters */
-				if (j == cmd->n_ssids) {
-					ret = -EINVAL;
-					goto out;
-				}
+				if (j == cmd->n_ssids)
+					return -EINVAL;
 			}
 		}
 	}
 
 	return cmd->n_ssids;
-out:
-	if (ret < 0)
-		return ret;
-
-	return 0;
 }
 
 int cc33xx_sched_scan_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			    struct cfg80211_sched_scan_request *req,
 			    struct ieee80211_scan_ies *ies)
 {
-	struct cc33xx_cmd_scan_params *cmd;
-	struct cc33xx_cmd_ssid_list *ssid_list;
-	struct cc33xx_scan_channels *cmd_channels = NULL;
+	struct cc33xx_cmd_scan_params *cmd __free(kfree) = NULL;
+	struct cc33xx_cmd_ssid_list *ssid_list __free(kfree) = NULL;
+	struct cc33xx_scan_channels *cmd_channels __free(kfree) = NULL;
 	struct conf_sched_scan_settings *c = &cc->conf.host_conf.sched_scan;
 	int ret;
 	int n_ssids = 0;
 	int alloc_size = sizeof(*cmd);
 
-	ssid_list = kzalloc(sizeof(*ssid_list), GFP_KERNEL);
-	if (!ssid_list) {
-		ret = -ENOMEM;
-		goto out_ssid_free;
-	}
+	ssid_list = kzalloc_obj(*ssid_list);
+	if (!ssid_list)
+		return -ENOMEM;
 
-	n_ssids = cc33xx_scan_sched_scan_ssid_list(cc, wlvif, req, ssid_list);
+	n_ssids = cc33xx_scan_sched_scan_ssid_list(wlvif, req, ssid_list);
 	if (n_ssids < 0)
-		return n_ssids;
+		return -EINVAL;
 
 	if (n_ssids <= 5) {
 		alloc_size += (n_ssids * sizeof(struct cc33xx_ssid));
@@ -686,23 +656,19 @@ int cc33xx_sched_scan_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 		ret = cc33xx_cmd_send(cc, CMD_CONNECTION_SCAN_SSID_CFG,
 				      ssid_list, sizeof(*ssid_list), 0);
 		if (ret < 0) {
-			cc33xx_error("cmd sched scan ssid list failed");
-			goto out_ssid_free;
+			dev_err(cc->dev, "cmd sched scan ssid list failed\n");
+			return ret;
 		}
 	}
 
 	cmd = kzalloc(alloc_size, GFP_KERNEL);
-	if (!cmd) {
-		ret = -ENOMEM;
-		goto out_free;
-	}
+	if (!cmd)
+		return -ENOMEM;
 
 	cmd->role_id = wlvif->role_id;
 
-	if (WARN_ON(cmd->role_id == CC33XX_INVALID_ROLE_ID)) {
-		ret = -EINVAL;
-		goto out_free;
-	}
+	if (WARN_ON(cmd->role_id == CC33XX_INVALID_ROLE_ID))
+		return -EINVAL;
 
 	cmd->scan_type = SCAN_REQUEST_CONNECT_PERIODIC_SCAN;
 	cmd->rssi_threshold = c->rssi_threshold;
@@ -711,18 +677,16 @@ int cc33xx_sched_scan_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 	cmd->filter = 1;
 	cmd->num_of_ssids = n_ssids;
 
-	cc33xx_debug(DEBUG_CMD, "ssid list num of n_ssids %d", n_ssids);
+	cc33xx_debug(cc->dev, DEBUG_CMD, "ssid list num of n_ssids %d\n", n_ssids);
 	if (n_ssids > 0 && n_ssids <= 5) {
 		cmd->ssid_from_list = 1;
 		memcpy((u8 *)cmd + sizeof(*cmd), ssid_list->ssids,
 		       n_ssids * sizeof(struct cc33xx_ssid));
 	}
 
-	cmd_channels = kzalloc(sizeof(*cmd_channels), GFP_KERNEL);
-	if (!cmd_channels) {
-		ret = -ENOMEM;
-		goto out_free;
-	}
+	cmd_channels = kzalloc_obj(*cmd_channels);
+	if (!cmd_channels)
+		return -ENOMEM;
 
 	/* configure channels */
 	cc33xx_set_scan_chan_params(cc, cmd_channels, req->channels,
@@ -735,8 +699,8 @@ int cc33xx_sched_scan_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 
 	cmd->params.u.periodic.sched_scan_plans_num = req->n_scan_plans;
 
-	cc33xx_debug(DEBUG_SCAN,
-		     "interval[0]: %d, iterations[0]: %d, num_plans: %d",
+	cc33xx_debug(cc->dev, DEBUG_SCAN,
+		     "interval[0]: %d, iterations[0]: %d, num_plans: %d\n",
 		     cmd->params.u.periodic.sched_scan_plans[0].interval,
 		     cmd->params.u.periodic.sched_scan_plans[0].iterations,
 		     cmd->params.u.periodic.sched_scan_plans_num);
@@ -747,27 +711,18 @@ int cc33xx_sched_scan_start(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 					 ies->ies[NL80211_BAND_2GHZ],
 					 ies->len[NL80211_BAND_2GHZ],
 					 ies->common_ies,
-					 ies->common_ie_len, true);
+					 ies->common_ie_len);
 
 	if (ret < 0) {
-		cc33xx_error("PROBE request template failed");
-		goto out_free;
+		dev_err(cc->dev, "PROBE request template failed\n");
+		return ret;
 	}
 
 	cc33xx_dump(DEBUG_SCAN, "SCAN: ", cmd, alloc_size);
 
 	ret = cc33xx_cmd_send(cc, CMD_SCAN, cmd, alloc_size, 0);
-	if (ret < 0) {
-		cc33xx_error("SCAN failed");
-		goto out_free;
-	}
-
-out_free:
-	kfree(cmd_channels);
-	kfree(cmd);
-
-out_ssid_free:
-	kfree(ssid_list);
+	if (ret < 0)
+		dev_err(cc->dev, "SCAN failed\n");
 
 	return ret;
 }
@@ -775,10 +730,10 @@ out_ssid_free:
 static int __cc33xx_scan_stop(struct cc33xx *cc,
 			      struct cc33xx_vif *wlvif, u8 scan_type)
 {
-	struct cc33xx_cmd_scan_stop *stop;
+	struct cc33xx_cmd_scan_stop *stop __free(kfree) = NULL;
 	int ret;
 
-	stop = kzalloc(sizeof(*stop), GFP_KERNEL);
+	stop = kzalloc_obj(*stop);
 	if (!stop)
 		return -ENOMEM;
 
@@ -786,13 +741,9 @@ static int __cc33xx_scan_stop(struct cc33xx *cc,
 	stop->scan_type = scan_type;
 
 	ret = cc33xx_cmd_send(cc, CMD_STOP_SCAN, stop, sizeof(*stop), 0);
-	if (ret < 0) {
-		cc33xx_error("failed to send sched scan stop command");
-		goto out_free;
-	}
+	if (ret < 0)
+		dev_err(cc->dev, "failed to send sched scan stop command\n");
 
-out_free:
-	kfree(stop);
 	return ret;
 }
 
@@ -813,57 +764,45 @@ int cc33xx_scan_stop(struct cc33xx *cc, struct cc33xx_vif *wlvif)
 	return __cc33xx_scan_stop(cc, wlvif, SCAN_REQUEST_ONE_SHOT);
 }
 
-void cc33xx_scan_complete_work(struct work_struct *work)
+void cc33xx_scan_complete_work(struct wiphy *wiphy,
+			       struct wiphy_work *work)
+
 {
-	struct delayed_work *dwork;
 	struct cc33xx *cc;
 	struct cfg80211_scan_info info = {
 		.aborted = false,
 	};
 
-	dwork = to_delayed_work(work);
-	cc = container_of(dwork, struct cc33xx, scan_complete_work);
-
-	mutex_lock(&cc->mutex);
+	cc = container_of(work, struct cc33xx, scan_complete_work.work);
 
 	if (unlikely(cc->state != CC33XX_STATE_ON))
-		goto out;
+		return;
 
 	if (cc->scan.state == CC33XX_SCAN_STATE_IDLE)
-		goto out;
-
-	/* Rearm the tx watchdog just before idling scan. This
-	 * prevents just-finished scans from triggering the watchdog
-	 */
-	cc33xx_rearm_tx_watchdog_locked(cc);
+		return;
 
 	cc->scan.state = CC33XX_SCAN_STATE_IDLE;
-	memset(cc->scan.scanned_ch, 0, sizeof(cc->scan.scanned_ch));
 	cc->scan.req = NULL;
 	cc->scan_wlvif = NULL;
 
 	if (cc->scan.failed) {
-		cc33xx_info("Scan completed due to error.");
+		dev_info(cc->dev, "Scan completed due to error.\n");
 		cc33xx_queue_recovery_work(cc);
 	}
 
-	cc33xx_cmd_regdomain_config_locked(cc);
-
 	ieee80211_scan_completed(cc->hw, &info);
-
-out:
-	mutex_unlock(&cc->mutex);
 }
 
 int cc33xx_scan(struct cc33xx *cc, struct ieee80211_vif *vif, const u8 *ssid,
 		size_t ssid_len, struct cfg80211_scan_request *req)
 {
 	struct cc33xx_vif *wlvif = cc33xx_vif_to_data(vif);
+	int ret;
 
 	if (cc->scan.state != CC33XX_SCAN_STATE_IDLE)
 		return -EBUSY;
 
-	cc->scan.state = CC33XX_SCAN_STATE_2GHZ_ACTIVE;
+	cc->scan.state = CC33XX_SCAN_STATE_ACTIVE;
 
 	if (ssid_len && ssid) {
 		cc->scan.ssid_len = ssid_len;
@@ -872,29 +811,32 @@ int cc33xx_scan(struct cc33xx *cc, struct ieee80211_vif *vif, const u8 *ssid,
 		cc->scan.ssid_len = 0;
 	}
 
-	cc->scan_wlvif = wlvif;
-	cc->scan.req = req;
-	memset(cc->scan.scanned_ch, 0, sizeof(cc->scan.scanned_ch));
-
 	/* we assume failure so that timeout scenarios are handled correctly */
 	cc->scan.failed = true;
-	ieee80211_queue_delayed_work(cc->hw, &cc->scan_complete_work,
-				     msecs_to_jiffies(CC33XX_SCAN_TIMEOUT));
 
-	cc33xx_scan_start(cc, wlvif, req);
+	ret = cc33xx_scan_start(cc, wlvif, req);
+	if (ret < 0) {
+		dev_err(cc->dev, "Failed to start scan: %d\n", ret);
+		cc->scan.state = CC33XX_SCAN_STATE_IDLE;
+		return ret;
+	}
 
-	return 0;
+	cc->scan_wlvif = wlvif;
+	cc->scan.req = req;
+
+	wiphy_delayed_work_queue(cc->hw->wiphy, &cc->scan_complete_work,
+				 msecs_to_jiffies(CC33XX_SCAN_TIMEOUT));
+
+	return ret;
 }
 
-inline void cc33xx_scan_sched_scan_results(struct cc33xx *cc)
+void cc33xx_scan_completed(struct cc33xx *cc)
 {
-	ieee80211_sched_scan_results(cc->hw);
-}
-
-void cc33xx_scan_completed(struct cc33xx *cc, struct cc33xx_vif *wlvif)
-{
-	cc->scan.failed = false;
-	cancel_delayed_work(&cc->scan_complete_work);
-	ieee80211_queue_delayed_work(cc->hw, &cc->scan_complete_work,
-				     msecs_to_jiffies(0));
+	wiphy_lock(cc->hw->wiphy);
+	if (cc->scan_wlvif) {
+		cc->scan.failed = false;
+		wiphy_delayed_work_queue(cc->hw->wiphy, &cc->scan_complete_work,
+					 msecs_to_jiffies(0));
+	}
+	wiphy_unlock(cc->hw->wiphy);
 }

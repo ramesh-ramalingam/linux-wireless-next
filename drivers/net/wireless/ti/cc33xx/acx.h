@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __ACX_H__
@@ -427,7 +427,7 @@ struct acx_rx_filter_cfg {
 
 	u8 enable;
 
-	/* 0 - WL1271_MAX_RX_FILTERS-1 */
+	/* 0 - CC33XX_MAX_RX_FILTERS-1 */
 	u8 index;
 
 	u8 action;
@@ -713,10 +713,6 @@ struct cc33xx_roaming_stats {
 	s32 rssi_level;
 } __packed;
 
-struct cc33xx_dfs_stats {
-	__le32 num_of_radar_detections;
-} __packed;
-
 struct cc33xx_acx_statistics {
 	struct acx_header header;
 
@@ -733,7 +729,6 @@ struct cc33xx_acx_statistics {
 	struct cc33xx_acx_thermal_stats		thermal;
 	struct cc33xx_acx_calib_failure_stats	calib;
 	struct cc33xx_roaming_stats		roaming;
-	struct cc33xx_dfs_stats			dfs;
 } __packed;
 
 /* ACX_PEER_CAP
@@ -782,10 +777,9 @@ struct acx_preamble_and_tx_rate {
 	u8 role_id;
 } __packed;
 
-int cc33xx_acx_wake_up_conditions(struct cc33xx *cc, struct cc33xx_vif *wlvif,
-				  u8 wake_up_event, u8 listen_interval);
+int cc33xx_acx_wake_up_conditions(struct cc33xx *cc, u8 wake_up_event,
+				  u8 listen_interval);
 int cc33xx_acx_sleep_auth(struct cc33xx *cc, u8 sleep_auth);
-int cc33xx_ble_enable(struct cc33xx *cc, u8 ble_enable);
 int cc33xx_acx_tx_power(struct cc33xx *cc, struct cc33xx_vif *wlvif, int power);
 int cc33xx_acx_slot(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 		    enum acx_slot_type slot_time);
@@ -813,8 +807,6 @@ int cc33xx_acx_set_ht_information(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 				  u16 he_oper_nss_set);
 int cc33xx_acx_set_ba_receiver_session(struct cc33xx *cc, u8 tid_index, u16 ssn,
 				       bool enable, u8 peer_hlid, u8 win_size);
-int cc33xx_acx_tsf_info(struct cc33xx *cc,
-			struct cc33xx_vif *wlvif, u64 *mactime);
 int cc33xx_acx_config_ps(struct cc33xx *cc, struct cc33xx_vif *wlvif);
 int cc33xx_acx_get_tx_rate(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 			   struct station_info *sinfo);
@@ -829,7 +821,7 @@ int cc33xx_acx_set_peer_cap(struct cc33xx *cc,
 			    struct ieee80211_sta_ht_cap *ht_cap,
 			    struct ieee80211_sta_he_cap *he_cap,
 			    struct cc33xx_vif *wlvif, bool allow_ht_operation,
-			    u32 rate_set, u8 hlid);
+			    u32 rate_set);
 int cc33xx_acx_trigger_fw_assert(struct cc33xx *cc);
 
 #endif /* __CC33XX_ACX_H__ */

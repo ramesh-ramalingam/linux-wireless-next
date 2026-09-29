@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #include "cc33xx.h"
@@ -12,12 +12,12 @@ bool cc33xx_set_block_size(struct cc33xx *cc)
 {
 	if (cc->if_ops->set_block_size) {
 		cc->if_ops->set_block_size(cc->dev, CC33XX_BUS_BLOCK_SIZE);
-		cc33xx_debug(DEBUG_CC33xx,
-			     "Set BLKsize to %d", CC33XX_BUS_BLOCK_SIZE);
+		cc33xx_debug(cc->dev, DEBUG_CC33XX,
+			     "Set BLKsize to %d\n", CC33XX_BUS_BLOCK_SIZE);
 		return true;
 	}
 
-	cc33xx_debug(DEBUG_CC33xx, "Could not set BLKsize");
+	cc33xx_debug(cc->dev, DEBUG_CC33XX, "Could not set BLKsize\n");
 	return false;
 }
 
@@ -26,7 +26,6 @@ void cc33xx_disable_interrupts_nosync(struct cc33xx *cc)
 	cc->if_ops->disable_irq(cc->dev);
 }
 
-void cc33xx_irq(void *cookie);
 void cc33xx_enable_interrupts(struct cc33xx *cc)
 {
 	cc->if_ops->enable_irq(cc->dev);
@@ -47,14 +46,14 @@ void cc33xx_io_init(struct cc33xx *cc)
 }
 
 /* Raw target IO, address is not translated */
-static int __must_check cc33xx_raw_write(struct cc33xx *cc, int addr,
-					 void *buf, size_t len, bool fixed)
+int __must_check cc33xx_raw_write(struct cc33xx *cc, int addr,
+				  void *buf, size_t len, bool fixed)
 {
 	int ret;
 
 	if (test_bit(CC33XX_FLAG_IO_FAILED, &cc->flags) ||
 	    WARN_ON((test_bit(CC33XX_FLAG_IN_ELP, &cc->flags) &&
-		     addr != HW_ACCESS_ELP_CTRL_REG)))
+		     addr != CC33XX_HW_ACCESS_ELP_CTRL_REG)))
 		return -EIO;
 
 	ret = cc->if_ops->write(cc->dev, addr, buf, len, fixed);
@@ -71,7 +70,7 @@ int __must_check cc33xx_raw_read(struct cc33xx *cc, int addr,
 
 	if (test_bit(CC33XX_FLAG_IO_FAILED, &cc->flags) ||
 	    WARN_ON((test_bit(CC33XX_FLAG_IN_ELP, &cc->flags) &&
-		     addr != HW_ACCESS_ELP_CTRL_REG)))
+		     addr != CC33XX_HW_ACCESS_ELP_CTRL_REG)))
 		return -EIO;
 
 	ret = cc->if_ops->read(cc->dev, addr, buf, len, fixed);
@@ -79,12 +78,6 @@ int __must_check cc33xx_raw_read(struct cc33xx *cc, int addr,
 		set_bit(CC33XX_FLAG_IO_FAILED, &cc->flags);
 
 	return ret;
-}
-
-int __must_check cc33xx_write(struct cc33xx *cc, int addr,
-			      void *buf, size_t len, bool fixed)
-{
-	return cc33xx_raw_write(cc, addr, buf, len, fixed);
 }
 
 void claim_core_status_lock(struct cc33xx *cc)

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (C) 2022-2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2022-2026 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __CC33XX_H__
@@ -30,15 +30,11 @@
 
 #define CC33XX_MAX_AP_STATIONS 16
 
-struct cc33xx_tx_hw_descr;
-struct cc33xx_rx_descriptor;
 struct partial_rx_frame;
-struct core_fw_status;
 struct core_status;
 
-enum wl_rx_buf_align;
-
 struct cc33xx_stats {
+	/* raw stats dump from FW. Covers power mgmt stats  */
 	void *fw_stats;
 	unsigned long fw_stats_update;
 	unsigned int retry_count;
@@ -50,6 +46,14 @@ struct cc33xx_ant_diversity {
 	s8 rssi_threshold;
 	u8 default_antenna;
 	u8 padding;
+};
+
+struct cc33xx_fw_versions {
+	u16 major_version;
+	u16 minor_version;
+	u16 api_version;
+	u16 build_version;
+	u8 phy_version[6];
 };
 
 struct cc33xx {
@@ -64,11 +68,15 @@ struct cc33xx {
 
 	int wakeirq;
 
-	/* Protects all mac80211 operations and parts of Rx, Tx and IRQ handling.
-	 * All functions postfixed with "_locked" (i.e, cc33xx_irq_locked)
+	/* Protects parts of Rx, Tx and IRQ handling.
+	 * All functions postfixed with "_locked"
 	 * assume this lock is held by caller.
 	 */
 	struct mutex mutex;
+	/*
+	 * Protects parts of cmd send function.
+	 */
+	struct mutex cmd_lock;
 
 	/* Used independently from above mutex to protect short critical sections.
 	 * Though many of these sections may theoretically execute in parallel, a
@@ -91,8 +99,6 @@ struct cc33xx {
 
 	unsigned long flags;
 
-	void *nvs_mac_addr;
-	size_t nvs_mac_addr_len;
 	struct cc33xx_fw_download *fw_download;
 
 	struct mac_address addresses[CC33XX_NUM_MAC_ADDRESSES];
@@ -112,18 +118,13 @@ struct cc33xx {
 	struct cc33xx_acx_mem_map *target_mem_map;
 
 	/* Accounting for allocated / available TX blocks on HW */
-
 	u32 tx_blocks_available;
 	u32 tx_allocated_blocks;
 
 	/* Accounting for allocated / available Tx packets in HW */
-
 	u32 tx_allocated_pkts[NUM_TX_QUEUES];
 
-	/* Time-offset between host and chipset clocks */
-
 	/* Frames scheduled for transmission, not handled yet */
-	int tx_queue_count[NUM_TX_QUEUES];
 	unsigned long queue_stop_reasons[NUM_TX_QUEUES * CC33XX_NUM_MAC_ADDRESSES];
 
 	/* Frames received, not handled yet by mac80211 */
@@ -151,26 +152,13 @@ struct cc33xx {
 	u32 aggr_buf_size;
 	size_t max_transaction_len;
 
-	/* Reusable dummy packet template */
-	struct sk_buff *dummy_packet;
-
 	/* Network stack work  */
 	struct work_struct netstack_work;
-	/* FW log buffer */
-	u8 *fwlog;
-
-	/* Number of valid bytes in the FW log buffer */
-	ssize_t fwlog_size;
 
 	/* Hardware recovery work */
 	struct work_struct recovery_work;
 
 	struct work_struct irq_deferred_work;
-
-	/* Reg domain last configuration */
-	DECLARE_BITMAP(reg_ch_conf_last, 64);
-	/* Reg domain pending configuration */
-	DECLARE_BITMAP(reg_ch_conf_pending, 64);
 
 	/* Lock-less list for deferred event handling */
 	struct llist_head event_list;
@@ -179,27 +167,17 @@ struct cc33xx {
 	/* events to unmask only when ap interface is up */
 	u32 ap_event_mask;
 
-	/* Are we currently scanning */
+	/* vif for which the scan is running */
 	struct cc33xx_vif *scan_wlvif;
 	struct cc33xx_scan scan;
-	struct delayed_work scan_complete_work;
+	struct wiphy_delayed_work scan_complete_work;
 
 	struct ieee80211_vif *roc_vif;
-	struct delayed_work roc_complete_work;
+	struct wiphy_delayed_work roc_complete_work;
 
 	struct cc33xx_vif *sched_vif;
 
-	u8 mac80211_scan_stopped;
-
-	/* The current band */
-	enum nl80211_band band;
-
-	/* in dBm */
-	int power_level;
-
 	struct cc33xx_stats stats;
-
-	__le32 *buffer_32;
 
 	/* Current chipset configuration */
 	struct cc33xx_conf_file conf;
@@ -238,25 +216,12 @@ struct cc33xx {
 	/* AP-mode - number of currently connected stations */
 	int active_sta_count;
 
-	/* last wlvif we transmitted from */
-	struct cc33xx_vif *last_wlvif;
-
-	/* work to fire when Tx is stuck */
-	struct delayed_work tx_watchdog_work;
-
 	/* HW HT (11n) capabilities */
 	struct ieee80211_sta_ht_cap ht_cap[CC33XX_NUM_BANDS];
-
-	/* the current dfs region */
-	enum nl80211_dfs_regions dfs_region;
-	bool radar_debug_mode;
 
 	/* RX Data filter rule state - enabled/disabled */
 	/* used in CONFIG PM AND W8 Code */
 	unsigned long rx_filter_enabled[BITS_TO_LONGS(CC33XX_MAX_RX_FILTERS)];
-
-	/* mutex for protecting the tx_flush function */
-	struct mutex flush_mutex;
 
 	/* sleep auth value currently configured to FW */
 	int sleep_auth;
@@ -281,8 +246,8 @@ struct cc33xx {
 
 	u16 max_cmd_size;
 
-	struct completion nvs_loading_complete;
 	struct completion command_complete;
+	struct completion peer_remove_complete;
 
 	/* dynamic fw traces */
 	u32 dynamic_fw_traces;
@@ -301,7 +266,7 @@ struct cc33xx {
 	u8 disable_5g;
 	u8 disable_6g;
 
-	struct cc33xx_acx_fw_versions *fw_ver;
+	struct cc33xx_fw_versions fw_ver;
 
 	u8 antenna_selection;
 
@@ -317,9 +282,6 @@ void cc33xx_update_inconn_sta(struct cc33xx *cc, struct cc33xx_vif *wlvif,
 void cc33xx_irq(void *cookie);
 
 /* Quirks */
-
-/* the first start_role(sta) sometimes doesn't work on wl12xx */
-#define CC33XX_QUIRK_START_STA_FAILS		BIT(1)
 
 /* wl127x and SPI don't support SDIO block size alignment */
 #define CC33XX_QUIRK_TX_BLOCKSIZE_ALIGN		BIT(2)
@@ -339,43 +301,39 @@ void cc33xx_irq(void *cookie);
 /* separate probe response templates for one-shot and sched scans */
 #define CC33XX_QUIRK_DUAL_PROBE_TMPL		BIT(10)
 
-/* Firmware requires reg domain configuration for active calibration */
-#define CC33XX_QUIRK_REGDOMAIN_CONF		BIT(11)
-
 /* The FW only support a zero session id for AP */
 #define CC33XX_QUIRK_AP_ZERO_SESSION_ID		BIT(12)
 
-/* TODO: move all these common registers and values elsewhere */
-#define HW_ACCESS_ELP_CTRL_REG		0x1FFFC
+#define CC33XX_HW_ACCESS_ELP_CTRL_REG		0x1FFFC
 
-enum CC33xx_FRAME_FORMAT {
-	CC33xx_B_SHORT = 0,
-	CC33xx_B_LONG,
-	CC33xx_LEGACY_OFDM,
-	CC33xx_HT_MF,
-	CC33xx_HT_GF,
-	CC33xx_HE_SU,
-	CC33xx_HE_MU,
-	CC33xx_HE_SU_ER,
-	CC33xx_HE_TB,
-	CC33xx_HE_TB_NDP_FB,
-	CC33xx_VHT
+enum CC33XX_FRAME_FORMAT {
+	CC33XX_B_SHORT = 0,
+	CC33XX_B_LONG,
+	CC33XX_LEGACY_OFDM,
+	CC33XX_HT_MF,
+	CC33XX_HT_GF,
+	CC33XX_HE_SU,
+	CC33XX_HE_MU,
+	CC33XX_HE_SU_ER,
+	CC33XX_HE_TB,
+	CC33XX_HE_TB_NDP_FB,
+	CC33XX_VHT
 };
 
 /* CC33xx HW Common Definitions */
 
-#define HOST_SYNC_PATTERN	0x5C5C5C5C
-#define DEVICE_SYNC_PATTERN	0xABCDDCBA
-#define NAB_DATA_ADDR		0x0000BFF0
-#define NAB_CONTROL_ADDR	0x0000BFF8
-#define NAB_STATUS_ADDR		0x0000BFFC
+#define CC33XX_HOST_SYNC_PATTERN	0x5C5C5C5C
+#define CC33XX_DEVICE_SYNC_PATTERN	0xABCDDCBA
+#define CC33XX_NAB_DATA_ADDR		0x0000BFF0
+#define CC33XX_NAB_CONTROL_ADDR	0x0000BFF8
+#define CC33XX_NAB_STATUS_ADDR		0x0000BFFC
 
-#define NAB_SEND_CMD			0x940d
-#define NAB_SEND_FLAGS			0x08
-#define CC33xx_INTERNAL_DESC_SIZE	200
-#define NAB_EXTRA_BYTES			4
+#define CC33XX_NAB_SEND_CMD			0x940d
+#define CC33XX_NAB_SEND_FLAGS			0x08
+#define CC33XX_INTERNAL_DESC_SIZE	200
+#define CC33XX_NAB_EXTRA_BYTES			4
 
-#define TX_RESULT_QUEUE_SIZE  108
+#define CC33XX_TX_RESULT_QUEUE_SIZE  108
 
 struct control_info_descriptor {
 	__le16 type_and_length;
@@ -390,7 +348,7 @@ enum control_message_type {
 struct core_fw_status {
 	u8	tx_result_queue_index;
 	u8	reserved1[3];
-	u8	tx_result_queue[TX_RESULT_QUEUE_SIZE];
+	u8	tx_result_queue[CC33XX_TX_RESULT_QUEUE_SIZE];
 
 	/* A bitmap (where each bit represents a single HLID)
 	 * to indicate PS/Active mode of the link
@@ -407,25 +365,35 @@ struct core_fw_status {
 	 */
 	__le32	link_suspend_bitmap;
 
-	/* Host TX Flow Control descriptor per AC threshold */
+	/* packet threshold for an "almost empty" AC,
+	 * for Tx schedulng purposes
+	 */
 	u8      tx_flow_control_ac_threshold;
 
-	/* Host TX Flow Control descriptor PS link threshold */
+	/* number of packets to queue up for a link in PS */
 	u8      tx_ps_threshold;
 
-	/* Host TX Flow Control descriptor Suspended link threshold */
+	/* number of packet to queue up for a suspended link */
 	u8      tx_suspend_threshold;
 
-	/* Host TX Flow Control descriptor Slow link threshold */
+	/* Should have less than this number of packets in queue of a slow
+	 * link to qualify as high priority link
+	 */
 	u8      tx_slow_link_prio_threshold;
 
-	/* Host TX Flow Control descriptor Fast link threshold */
+	/* Should have less than this number of packets in queue of a fast
+	 * link to qualify as high priority link
+	 */
 	u8      tx_fast_link_prio_threshold;
 
-	/* Host TX Flow Control descriptor Stop Slow link threshold */
+	/* Should have less than this number of packets in queue of a slow
+	 * link before we stop queuing up packets for it.
+	 */
 	u8      tx_slow_stop_threshold;
 
-	/* Host TX Flow Control descriptor Stop Fast link threshold */
+	/* Should have less than this number of packets in queue of a fast
+	 * link before we stop queuing up packets for it.
+	 */
 	u8      tx_fast_stop_threshold;
 
 	u8      reserved2;
@@ -440,11 +408,11 @@ struct core_status {
 	__le32 tsf;
 } __packed;
 
-struct NAB_header {
+struct nab_header {
 	__le32 sync_pattern;
 	__le16 opcode;
 	__le16 len;
-};
+} __packed;
 
 /* rx_status lower bytes hold the rx byte count */
 #define RX_BYTE_COUNT_MASK 0xFFFF
@@ -463,7 +431,7 @@ struct NAB_header {
 	HINT_FW_WAKEUP_COMPLETE | \
 	HINT_FW_INIT_COMPLETE)
 
-struct NAB_tx_header {
+struct nab_tx_header {
 	__le32 sync;
 	__le16 opcode;
 	__le16 len;
@@ -472,7 +440,7 @@ struct NAB_tx_header {
 	u8     flags;
 } __packed;
 
-struct NAB_rx_header {
+struct nab_rx_header {
 	__le32 cnys;
 	__le16 opcode;
 	__le16 len;
